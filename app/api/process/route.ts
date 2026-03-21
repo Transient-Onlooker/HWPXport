@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ExamData, ProcessResult } from '@/lib/types';
-import { assembleHwpx } from '@/lib/hwpx/builder';
-import { HWPX_BASE_TEMPLATE } from '@/lib/hwpx/templates';
+import { buildHwpx, generateHwpxFilename } from '@/lib/hwpx/builder';
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 
 /**
  * Gemini 듀얼 트랙 기반 HWPX 시험지 복원 API
- * 
+ *
  * Track 1 (Lite): 이미지 복잡도 판별 → 비용 절감
  * Track 2 (Flash): 정밀 파싱 → 수식/구조 추출
  */
@@ -145,7 +144,7 @@ async function processImageFile(file: File): Promise<{ data: string; mimeType: s
   const arrayBuffer = await file.arrayBuffer();
   const base64Data = Buffer.from(arrayBuffer).toString('base64');
   const mimeType = file.type || 'image/png';
-  
+
   return { data: base64Data, mimeType };
 }
 
@@ -183,7 +182,7 @@ async function runParser(
   isComplex: boolean
 ): Promise<ExamData> {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY!);
-  
+
   // 복잡도에 따라 모델과 프롬프트 선택
   const model = genAI.getGenerativeModel({
     model: isComplex ? MODEL_PARSER_COMPLEX : MODEL_PARSER_SIMPLE,
@@ -206,7 +205,7 @@ async function runParser(
   ]);
 
   const examData: ExamData = JSON.parse(result.response.text());
-  
+
   // 유효성 검사
   if (!examData.title || !Array.isArray(examData.questions)) {
     throw new Error('Invalid response structure from Gemini');
@@ -250,14 +249,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ProcessRe
     const examData = await runParser(imageData, isComplex);
     console.log(`[Parser] Extracted ${examData.questions.length} questions`);
 
-    // 6. HWPX 조립
-    const hwpxContent = assembleHwpx(HWPX_BASE_TEMPLATE, examData);
+    // 6. HWPX 조립 (ZIP 형식)
+    const hwpxBuffer = await buildHwpx(examData);
 
     // 7. HWPX 파일로 응답
-    return new NextResponse(hwpxContent, {
+    return new NextResponse(hwpxBuffer, {
       headers: {
         'Content-Type': 'application/vnd.hanplus.hwpx',
-        'Content-Disposition': `attachment; filename="${examData.title}.hwpx"`,
+        'Content-Disposition': `attachment; filename="${generateHwpxFilename(examData.title)}"`,
       },
     });
   } catch (error) {
