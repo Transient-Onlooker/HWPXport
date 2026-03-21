@@ -15,8 +15,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // 모델 상수
 const MODEL_ROUTER = 'gemini-3.1-flash-lite-preview'; // 복잡도 판별용 (저비용)
-const MODEL_PARSER_COMPLEX = 'gemini-3-flash';        // 정밀 파싱용 (복잡한 수식)
-const MODEL_PARSER_SIMPLE = 'gemini-3-flash';         // 빠른 파싱용 (텍스트 중심)
+const MODEL_PARSER_COMPLEX = 'gemini-3-flash-preview';        // 정밀 파싱용 (복잡한 수식)
+const MODEL_PARSER_SIMPLE = 'gemini-3-flash-preview';         // 빠른 파싱용 (텍스트 중심)
 
 /**
  * Gemini response schema (ExamData 구조)
