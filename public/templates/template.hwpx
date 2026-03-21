@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="http://www.hangulwordprocessor.com/hwpx/2023/content">
+  <Head>
+    <FileHeader Version="1.0"/>
+    <DocInfo>
+      <PageDef PaperSize="215900000" PaperWidth="215900000" PaperHeight="297000000" MarginLeft="19050000" MarginRight="19050000" MarginTop="19050000" MarginBottom="19050000"/>
+      <FontList>
+        <Font ID="0" Name="Gulim"/>
+        <Font ID="1" Name="Batang"/>
+        <Font ID="2" Name="Malgun Gothic"/>
+      </FontList>
+      <ParaShapeList>
+        <ParaShape ID="0" Align="Justify" LineSpacing="160" LineSpacingType="Percent"/>
+      </ParaShapeList>
+    </DocInfo>
+  </Head>
+  <Body>
+    <Section>
+      <PageDef/>
+      <BodySection>
+        <!-- 여기에 문제 내용이 삽입됩니다 -->
+      </BodySection>
+    </Section>
+  </Body>
+</Document>
