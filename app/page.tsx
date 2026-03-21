@@ -230,28 +230,34 @@ async function processFile(file: File): Promise<ProcessedInput> {
 
 export default function Home() {
   const [state, setState] = useState<UploadState>({ status: 'IDLE' });
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    if (typeof window === 'undefined') {
-      return false;
-    }
-
-    const saved = localStorage.getItem('darkMode');
-    if (saved !== null) {
-      return JSON.parse(saved);
-    }
-
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
+  const [darkMode, setDarkMode] = useState(false);
   const [debugData, setDebugData] = useState<{
     images: { url: string; name: string }[];
     jsonResponse: string;
   }>({ images: [], jsonResponse: '' });
   const [uploaderKey, setUploaderKey] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    const saved = localStorage.getItem('darkMode');
+    const initialDarkMode =
+      saved !== null
+        ? JSON.parse(saved)
+        : window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    setDarkMode(initialDarkMode);
+    document.documentElement.classList.toggle('dark', initialDarkMode);
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) {
+      return;
+    }
+
     document.documentElement.classList.toggle('dark', darkMode);
     localStorage.setItem('darkMode', JSON.stringify(darkMode));
-  }, [darkMode]);
+  }, [darkMode, mounted]);
 
   const handleFileSelect = useCallback(async (files: File[]) => {
     try {
@@ -411,8 +417,9 @@ export default function Home() {
             onClick={() => setDarkMode((prev: boolean) => !prev)}
             className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             title="Toggle dark mode"
+            suppressHydrationWarning
           >
-            {darkMode ? 'Light' : 'Dark'}
+            {mounted ? (darkMode ? 'Light' : 'Dark') : 'Dark'}
           </button>
         </div>
       </header>
