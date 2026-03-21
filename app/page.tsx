@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { FileUploader } from '@/components/FileUploader';
 import { StatusMessage } from '@/components/StatusMessage';
 
@@ -10,7 +10,11 @@ let PDFJS: typeof import('pdfjs-dist') | null = null;
 async function loadPDFJS() {
   if (!PDFJS) {
     PDFJS = await import('pdfjs-dist');
-    PDFJS.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${PDFJS.version}/build/pdf.worker.min.mjs`;
+    // 로컬 node_modules 의 워커 사용 (CORS 문제 없음)
+    PDFJS.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url
+    ).toString();
   }
   return PDFJS;
 }
@@ -167,8 +171,29 @@ async function processFile(file: File): Promise<Blob[]> {
  */
 export default function Home() {
   const [state, setState] = useState<UploadState>({ status: 'IDLE' });
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    // 초기값: 시스템 테마 또는 localStorage 에서 읽기
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('darkMode');
+      if (saved !== null) {
+        return JSON.parse(saved);
+      }
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // darkMode 변경 시 html 태그에 클래스 적용
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('darkMode', 'true');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('darkMode', 'false');
+    }
+  }, [darkMode]);
 
   /**
    * 파일 선택 핸들러
@@ -207,12 +232,12 @@ export default function Home() {
               : `${file.name} 처리 중... (${currentFileNum}/${totalFiles})`
           }));
 
-          // FormData 생성
+          // FormData 생성 (파일명은 ASCII 만 사용 - 한국어 인코딩 문제 방지)
           const formData = new FormData();
-          const outputFilename = isPdf
-            ? file.name.replace(/\.pdf$/i, `_p${pageNum}.jpg`)
-            : file.name;
-          formData.append('file', optimizedBlob, outputFilename);
+          const safeFilename = isPdf
+            ? `page_${pageNum}.jpg`
+            : `image_${fileIndex + 1}.jpg`;
+          formData.append('file', optimizedBlob, safeFilename);
 
           // API 호출
           setState({
@@ -229,17 +254,23 @@ export default function Home() {
 
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            console.error('[Upload] API Error:', response.status, errorData);
             throw new Error(errorData.error || `서버 오류: ${response.status}`);
           }
 
           // HWPX 파일 받기
           const blob = await response.blob();
+          console.log('[Upload] Received blob:', blob.type, blob.size);
           allHwpxFiles.push(blob);
           lastResponse = response;
         }
       }
 
       // 4. 모든 파일 처리 완료 - 첫 번째 파일만 다운로드
+      if (allHwpxFiles.length === 0) {
+        throw new Error('처리된 파일이 없습니다.');
+      }
+
       const firstBlob = allHwpxFiles[0];
       const contentDisposition = lastResponse?.headers.get('Content-Disposition');
 
@@ -298,8 +329,7 @@ export default function Home() {
   }, []);
 
   return (
-    <div className={darkMode ? 'dark' : ''}>
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-300">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 transition-colors duration-300">
         {/* 헤더 */}
         <header className="sticky top-0 z-10 backdrop-blur-md bg-white/70 dark:bg-gray-900/70 border-b border-gray-200 dark:border-gray-700">
           <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
@@ -414,6 +444,5 @@ export default function Home() {
           </div>
         </footer>
       </div>
-    </div>
   );
 }
