@@ -30,45 +30,54 @@ const IMAGE_OPTIMIZATION = {
 } as const;
 
 /**
- * PDF 를 이미지로 변환 (첫 페이지)
+ * PDF 를 이미지로 변환 (모든 페이지)
  */
-async function convertPdfToImage(file: File): Promise<Blob> {
+async function convertPdfToImage(file: File): Promise<Blob[]> {
   return new Promise(async (resolve, reject) => {
     try {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await PDFJS.getDocument({ data: arrayBuffer }).promise;
+      const images: Blob[] = [];
 
-      // 첫 페이지 렌더링
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 2.0 }); // 고해상도
+      // 모든 페이지 순회
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 2.0 }); // 고해상도
 
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Canvas context 를 생성할 수 없습니다.'));
-        return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context 를 생성할 수 없습니다.'));
+          return;
+        }
+
+        await page.render({
+          canvasContext: ctx,
+          viewport,
+        }).promise;
+
+        // JPEG 로 변환
+        const blob = await new Promise<Blob>((resolveBlob, rejectBlob) => {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                rejectBlob(new Error('이미지 변환에 실패했습니다.'));
+                return;
+              }
+              resolveBlob(blob);
+            },
+            'image/jpeg',
+            IMAGE_OPTIMIZATION.JPEG_QUALITY
+          );
+        });
+
+        images.push(blob);
       }
 
-      await page.render({
-        canvasContext: ctx,
-        viewport,
-      }).promise;
-
-      // JPEG 로 변환
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error('이미지 변환에 실패했습니다.'));
-            return;
-          }
-          resolve(blob);
-        },
-        'image/jpeg',
-        IMAGE_OPTIMIZATION.JPEG_QUALITY
-      );
+      resolve(images);
     } catch (error) {
       reject(new Error('PDF 변환 중 오류가 발생했습니다.'));
     }
@@ -136,11 +145,12 @@ async function optimizeImage(file: File): Promise<Blob> {
 /**
  * 파일 타입에 따라 적절한 변환 함수 선택
  */
-async function processFile(file: File): Promise<Blob> {
+async function processFile(file: File): Promise<Blob[]> {
   if (file.type === 'application/pdf') {
     return convertPdfToImage(file);
   } else {
-    return optimizeImage(file);
+    const blob = await optimizeImage(file);
+    return [blob];
   }
 }
 
@@ -162,39 +172,67 @@ export default function Home() {
 
       // 2. 파일 타입에 따라 변환 (PDF 또는 이미지)
       const isPdf = file.type === 'application/pdf';
-      const optimizedBlob = await processFile(file);
+      const optimizedBlobs = await processFile(file);
       setState((prev) => ({ ...prev, progress: 30 }));
 
-      // 3. FormData 생성 (원본 파일명 유지)
-      const formData = new FormData();
-      const outputFilename = isPdf 
-        ? file.name.replace(/\.pdf$/i, '.jpg') 
-        : file.name;
-      formData.append('file', optimizedBlob, outputFilename);
-      setState((prev) => ({ ...prev, progress: 50 }));
+      const totalFiles = optimizedBlobs.length;
+      const hwpxFiles: Blob[] = [];
+      let lastResponse: Response | null = null;
 
-      // 4. API 호출
-      const processingMessage = isPdf
-        ? 'PDF 를 이미지로 변환 중입니다...'
-        : 'Gemini AI 가 수식을 판별하고 있습니다...';
-      setState({ status: 'GENERATING', message: processingMessage });
+      // 3. 각 페이지/이미지를 개별적으로 API 호출
+      for (let i = 0; i < optimizedBlobs.length; i++) {
+        const optimizedBlob = optimizedBlobs[i];
+        const pageNum = i + 1;
+        
+        // 진행 상황 업데이트
+        const overallProgress = 30 + Math.floor(((i + 1) / totalFiles) * 70);
+        setState((prev) => ({ 
+          ...prev, 
+          progress: overallProgress,
+          message: isPdf 
+            ? `${pageNum}페이지 처리 중... (${i + 1}/${totalFiles})`
+            : 'Gemini AI 가 수식을 판별하고 있습니다...'
+        }));
 
-      const response = await fetch('/api/process', {
-        method: 'POST',
-        body: formData,
-      });
+        // FormData 생성
+        const formData = new FormData();
+        const outputFilename = isPdf
+          ? file.name.replace(/\.pdf$/i, `_p${pageNum}.jpg`)
+          : file.name;
+        formData.append('file', optimizedBlob, outputFilename);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `서버 오류: ${response.status}`);
+        // API 호출
+        setState({ 
+          status: 'GENERATING', 
+          message: isPdf 
+            ? `${pageNum}페이지 처리 중... (${i + 1}/${totalFiles})`
+            : 'Gemini AI 가 수식을 판별하고 있습니다...'
+        });
+
+        const response = await fetch('/api/process', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `서버 오류: ${response.status}`);
+        }
+
+        // HWPX 파일 받기
+        const blob = await response.blob();
+        hwpxFiles.push(blob);
+        lastResponse = response;
       }
 
-      // 5. HWPX 파일 다운로드 처리
-      const blob = await response.blob();
-      const contentDisposition = response.headers.get('Content-Disposition');
+      // 4. 모든 페이지 처리 완료 - 첫 번째 파일만 다운로드 (또는 병합 필요)
+      const firstBlob = hwpxFiles[0];
+      const contentDisposition = lastResponse?.headers.get('Content-Disposition');
 
       // 파일명 추출
-      let filename = 'exam.hwpx';
+      let filename = isPdf 
+        ? file.name.replace(/\.pdf$/i, '.hwpx')
+        : file.name.replace(/\.[^/.]+$/, '.hwpx');
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
         if (filenameMatch && filenameMatch[1]) {
@@ -202,8 +240,8 @@ export default function Home() {
         }
       }
 
-      // 6. 다운로드 트리거
-      const downloadUrl = URL.createObjectURL(blob);
+      // 5. 다운로드 트리거
+      const downloadUrl = URL.createObjectURL(firstBlob);
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = filename;
@@ -212,10 +250,12 @@ export default function Home() {
       document.body.removeChild(link);
       URL.revokeObjectURL(downloadUrl);
 
-      // 7. SUCCESS 상태로 전환
+      // 6. SUCCESS 상태로 전환
       setState({
         status: 'SUCCESS',
-        message: `${filename} 파일이 다운로드되었습니다.`,
+        message: isPdf
+          ? `총 ${totalFiles}페이지 처리 완료. ${filename} 파일이 다운로드되었습니다.`
+          : `${filename} 파일이 다운로드되었습니다.`,
         filename
       });
 
@@ -348,7 +388,7 @@ export default function Home() {
             </ul>
             <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
               <p className="text-sm text-blue-700 dark:text-blue-300">
-                <span className="font-bold">💡 팁:</span> PDF 는 첫 페이지만 처리되며, 
+                <span className="font-bold">💡 팁:</span> PDF 는 모든 페이지가 개별적으로 처리되며,
                 이미지는 자동으로 최적화되어 업로드됩니다 (최대 20MB).
               </p>
             </div>
