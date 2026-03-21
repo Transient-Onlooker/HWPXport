@@ -252,11 +252,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ProcessRe
     // 6. HWPX 조립 (ZIP 형식)
     const hwpxBuffer = await buildHwpx(examData);
 
-    // 7. HWPX 파일로 응답
+    // 7. HWPX 파일로 응답 (파일명 인코딩 - RFC 5987)
+    const filename = generateHwpxFilename(examData.title);
+    const encodedFilename = encodeURIComponent(filename).replace(/'/g, '%27');
+    
     return new NextResponse(hwpxBuffer, {
       headers: {
         'Content-Type': 'application/vnd.hanplus.hwpx',
-        'Content-Disposition': `attachment; filename="${generateHwpxFilename(examData.title)}"`,
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodedFilename}`,
       },
     });
   } catch (error) {
