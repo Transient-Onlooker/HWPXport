@@ -173,74 +173,80 @@ export default function Home() {
   /**
    * 파일 선택 핸들러
    */
-  const handleFileSelect = useCallback(async (file: File) => {
+  const handleFileSelect = useCallback(async (files: File[]) => {
     try {
       // 1. UPLOADING 상태로 전환
       setState({ status: 'UPLOADING', progress: 0 });
 
-      // 2. 파일 타입에 따라 변환 (PDF 또는 이미지)
-      const isPdf = file.type === 'application/pdf';
-      const optimizedBlobs = await processFile(file);
-      setState((prev) => ({ ...prev, progress: 30 }));
-
-      const totalFiles = optimizedBlobs.length;
-      const hwpxFiles: Blob[] = [];
+      const totalFiles = files.length;
+      const allHwpxFiles: Blob[] = [];
       let lastResponse: Response | null = null;
 
-      // 3. 각 페이지/이미지를 개별적으로 API 호출
-      for (let i = 0; i < optimizedBlobs.length; i++) {
-        const optimizedBlob = optimizedBlobs[i];
-        const pageNum = i + 1;
+      // 2. 각 파일을 순차적으로 처리
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+        const file = files[fileIndex];
+        const isPdf = file.type === 'application/pdf';
         
-        // 진행 상황 업데이트
-        const overallProgress = 30 + Math.floor(((i + 1) / totalFiles) * 70);
-        setState((prev) => ({ 
-          ...prev, 
-          progress: overallProgress,
-          message: isPdf 
-            ? `${pageNum}페이지 처리 중... (${i + 1}/${totalFiles})`
-            : 'Gemini AI 가 수식을 판별하고 있습니다...'
-        }));
+        // 파일 변환 (PDF 는 모든 페이지, 이미지는 단일)
+        const optimizedBlobs = await processFile(file);
+        const pageBlobs = optimizedBlobs.length;
 
-        // FormData 생성
-        const formData = new FormData();
-        const outputFilename = isPdf
-          ? file.name.replace(/\.pdf$/i, `_p${pageNum}.jpg`)
-          : file.name;
-        formData.append('file', optimizedBlob, outputFilename);
+        // 3. 각 페이지/이미지를 개별적으로 API 호출
+        for (let i = 0; i < optimizedBlobs.length; i++) {
+          const optimizedBlob = optimizedBlobs[i];
+          const pageNum = i + 1;
+          const currentFileNum = fileIndex + 1;
 
-        // API 호출
-        setState({ 
-          status: 'GENERATING', 
-          message: isPdf 
-            ? `${pageNum}페이지 처리 중... (${i + 1}/${totalFiles})`
-            : 'Gemini AI 가 수식을 판별하고 있습니다...'
-        });
+          // 진행 상황 업데이트
+          const overallProgress = Math.floor(((fileIndex + (i + 1) / pageBlobs) / totalFiles) * 100);
+          setState((prev) => ({
+            ...prev,
+            progress: overallProgress,
+            message: isPdf
+              ? `${file.name} - ${pageNum}페이지 처리 중... (${i + 1}/${pageBlobs})`
+              : `${file.name} 처리 중... (${currentFileNum}/${totalFiles})`
+          }));
 
-        const response = await fetch('/api/process', {
-          method: 'POST',
-          body: formData,
-        });
+          // FormData 생성
+          const formData = new FormData();
+          const outputFilename = isPdf
+            ? file.name.replace(/\.pdf$/i, `_p${pageNum}.jpg`)
+            : file.name;
+          formData.append('file', optimizedBlob, outputFilename);
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `서버 오류: ${response.status}`);
+          // API 호출
+          setState({
+            status: 'GENERATING',
+            message: isPdf
+              ? `${file.name} - ${pageNum}페이지 처리 중... (${i + 1}/${pageBlobs})`
+              : `${file.name} 처리 중... (${currentFileNum}/${totalFiles})`
+          });
+
+          const response = await fetch('/api/process', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `서버 오류: ${response.status}`);
+          }
+
+          // HWPX 파일 받기
+          const blob = await response.blob();
+          allHwpxFiles.push(blob);
+          lastResponse = response;
         }
-
-        // HWPX 파일 받기
-        const blob = await response.blob();
-        hwpxFiles.push(blob);
-        lastResponse = response;
       }
 
-      // 4. 모든 페이지 처리 완료 - 첫 번째 파일만 다운로드 (또는 병합 필요)
-      const firstBlob = hwpxFiles[0];
+      // 4. 모든 파일 처리 완료 - 첫 번째 파일만 다운로드
+      const firstBlob = allHwpxFiles[0];
       const contentDisposition = lastResponse?.headers.get('Content-Disposition');
 
       // 파일명 추출
-      let filename = isPdf 
-        ? file.name.replace(/\.pdf$/i, '.hwpx')
-        : file.name.replace(/\.[^/.]+$/, '.hwpx');
+      let filename = totalFiles === 1 && files[0].type === 'application/pdf'
+        ? files[0].name.replace(/\.pdf$/i, '.hwpx')
+        : 'exam.hwpx';
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
         if (filenameMatch && filenameMatch[1]) {
@@ -261,9 +267,7 @@ export default function Home() {
       // 6. SUCCESS 상태로 전환
       setState({
         status: 'SUCCESS',
-        message: isPdf
-          ? `총 ${totalFiles}페이지 처리 완료. ${filename} 파일이 다운로드되었습니다.`
-          : `${filename} 파일이 다운로드되었습니다.`,
+        message: `총 ${totalFiles}개 파일 처리 완료. ${filename} 파일이 다운로드되었습니다.`,
         filename
       });
 

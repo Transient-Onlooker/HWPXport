@@ -3,10 +3,11 @@
 import { useCallback, useState, DragEvent, ChangeEvent } from 'react';
 
 interface Props {
-  onFileSelect: (file: File) => void;
+  onFileSelect: (files: File[]) => void;
   disabled?: boolean;
   accept?: string;
   maxSize?: number; // bytes
+  multiple?: boolean;
 }
 
 /**
@@ -14,21 +15,22 @@ interface Props {
  * - 이미지 미리보기
  * - 파일 크기 제한
  * - 드래그 앤 드롭 + 클릭 업로드 지원
+ * - 다중 파일 업로드 지원
  */
 export function FileUploader({
   onFileSelect,
   disabled = false,
   accept = 'image/*',
   maxSize = 10 * 1024 * 1024, // 10MB
+  multiple = true,
 }: Props) {
   const [isDragging, setIsDragging] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [previewUrls, setPreviewUrls] = useState<{ url: string; name: string; type: string }[]>([]);
 
   const validateFile = (file: File): string | null => {
     const isImage = file.type.startsWith('image/');
     const isPdf = file.type === 'application/pdf';
-    
+
     if (!isImage && !isPdf) {
       return '이미지 또는 PDF 파일만 업로드할 수 있습니다.';
     }
@@ -38,28 +40,40 @@ export function FileUploader({
     return null;
   };
 
-  const handleFile = useCallback((file: File) => {
-    const error = validateFile(file);
-    if (error) {
-      alert(error);
-      return;
+  const handleFiles = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const validFiles: File[] = [];
+    
+    for (const file of fileArray) {
+      const error = validateFile(file);
+      if (error) {
+        alert(`${file.name}: ${error}`);
+        continue;
+      }
+      validFiles.push(file);
     }
 
-    setFileName(file.name);
-    onFileSelect(file);
+    if (validFiles.length === 0) return;
 
-    // PDF 는 미리보기 생성 안 함 (이미지만 생성)
-    if (file.type === 'application/pdf') {
-      setPreviewUrl(null);
-      return;
-    }
+    // 미리보기 생성
+    const previews: { url: string; name: string; type: string }[] = [];
+    
+    validFiles.forEach((file) => {
+      if (file.type === 'application/pdf') {
+        previews.push({ url: '', name: file.name, type: 'pdf' });
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setPreviewUrls((prev) => [
+            ...prev,
+            { url: e.target?.result as string, name: file.name, type: 'image' }
+          ]);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
 
-    // 이미지 미리보기 생성
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setPreviewUrl(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+    onFileSelect(validFiles);
   }, [onFileSelect, maxSize]);
 
   const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
@@ -90,21 +104,20 @@ export function FileUploader({
 
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      handleFile(files[0]);
+      handleFiles(files);
     }
-  }, [disabled, handleFile]);
+  }, [disabled, handleFiles]);
 
   const handleInputChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      handleFile(files[0]);
+      handleFiles(files);
     }
-  }, [handleFile]);
+  }, [handleFiles]);
 
   const handleReset = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    setPreviewUrl(null);
-    setFileName(null);
+    setPreviewUrls([]);
   }, []);
 
   return (
@@ -117,55 +130,50 @@ export function FileUploader({
           : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
         }
         ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-        ${previewUrl || fileName ? 'p-2' : 'flex flex-col items-center justify-center'}
+        ${previewUrls.length > 0 ? 'p-2 overflow-auto' : 'flex flex-col items-center justify-center'}
       `}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {previewUrl ? (
+      {previewUrls.length > 0 ? (
         <div className="relative w-full h-full">
-          <img
-            src={previewUrl}
-            alt="Preview"
-            className="w-full h-full object-contain rounded-lg"
-          />
-          <button
-            type="button"
-            onClick={handleReset}
-            disabled={disabled}
-            className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors disabled:opacity-50"
-            title="파일 제거"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-          {fileName && (
-            <p className="absolute bottom-2 left-2 text-xs text-gray-600 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded">
-              {fileName}
-            </p>
-          )}
-        </div>
-      ) : fileName ? (
-        <div className="relative w-full h-full flex flex-col items-center justify-center">
-          <div className="text-6xl mb-4">📄</div>
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            {fileName}
-          </p>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            PDF 파일이 선택되었습니다
-          </p>
+          <div className="grid grid-cols-3 gap-2 h-full">
+            {previewUrls.map((item, index) => (
+              <div key={index} className="relative border rounded-lg overflow-hidden">
+                {item.type === 'image' ? (
+                  <img
+                    src={item.url}
+                    alt={item.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-800">
+                    <div className="text-3xl mb-1">📄</div>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 truncate px-1">
+                      {item.name}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
           {!disabled && (
             <button
               type="button"
               onClick={handleReset}
-              className="mt-4 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm rounded-lg transition-colors"
+              className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors"
+              title="파일 제거"
             >
-              파일 제거
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           )}
+          <p className="absolute bottom-2 left-2 text-xs text-gray-600 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded">
+            총 {previewUrls.length}개 파일
+          </p>
         </div>
       ) : (
         <>
@@ -174,6 +182,7 @@ export function FileUploader({
             accept={accept}
             onChange={handleInputChange}
             disabled={disabled}
+            multiple={multiple}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
           <div className="text-center p-6">
@@ -183,6 +192,9 @@ export function FileUploader({
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400">
               지원 형식: PNG, JPG, JPEG, WEBP, PDF (최대 {maxSize / 1024 / 1024}MB)
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              여러 파일을 동시에 선택할 수 있습니다
             </p>
           </div>
         </>
