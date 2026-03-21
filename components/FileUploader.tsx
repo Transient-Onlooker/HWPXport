@@ -26,8 +26,11 @@ export function FileUploader({
   const [fileName, setFileName] = useState<string | null>(null);
 
   const validateFile = (file: File): string | null => {
-    if (!file.type.startsWith('image/')) {
-      return '이미지 파일만 업로드할 수 있습니다.';
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf';
+    
+    if (!isImage && !isPdf) {
+      return '이미지 또는 PDF 파일만 업로드할 수 있습니다.';
     }
     if (file.size > maxSize) {
       return `파일 크기는 ${maxSize / 1024 / 1024}MB 이하여야 합니다.`;
@@ -45,7 +48,13 @@ export function FileUploader({
     setFileName(file.name);
     onFileSelect(file);
 
-    // 미리보기 생성
+    // PDF 는 미리보기 생성 안 함 (이미지만 생성)
+    if (file.type === 'application/pdf') {
+      setPreviewUrl(null);
+      return;
+    }
+
+    // 이미지 미리보기 생성
     const reader = new FileReader();
     reader.onload = (e) => {
       setPreviewUrl(e.target?.result as string);
@@ -103,12 +112,12 @@ export function FileUploader({
       className={`
         relative w-full h-64 border-2 border-dashed rounded-xl
         transition-all duration-200 ease-in-out
-        ${isDragging 
-          ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20' 
+        ${isDragging
+          ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20'
           : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
         }
         ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-        ${previewUrl ? 'p-2' : 'flex flex-col items-center justify-center'}
+        ${previewUrl || fileName ? 'p-2' : 'flex flex-col items-center justify-center'}
       `}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -139,6 +148,25 @@ export function FileUploader({
             </p>
           )}
         </div>
+      ) : fileName ? (
+        <div className="relative w-full h-full flex flex-col items-center justify-center">
+          <div className="text-6xl mb-4">📄</div>
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            {fileName}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            PDF 파일이 선택되었습니다
+          </p>
+          {!disabled && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="mt-4 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm rounded-lg transition-colors"
+            >
+              파일 제거
+            </button>
+          )}
+        </div>
       ) : (
         <>
           <input
@@ -154,7 +182,7 @@ export function FileUploader({
               파일을 여기에 드래그하거나 클릭하세요
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              지원 형식: PNG, JPG, JPEG, WEBP (최대 {maxSize / 1024 / 1024}MB)
+              지원 형식: PNG, JPG, JPEG, WEBP, PDF (최대 {maxSize / 1024 / 1024}MB)
             </p>
           </div>
         </>

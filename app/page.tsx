@@ -3,6 +3,10 @@
 import { useState, useCallback, useRef } from 'react';
 import { FileUploader } from '@/components/FileUploader';
 import { StatusMessage } from '@/components/StatusMessage';
+import * as PDFJS from 'pdfjs-dist';
+
+// PDF.js 워커 설정 (CDN 사용)
+PDFJS.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${PDFJS.version}/build/pdf.worker.min.mjs`;
 
 /**
  * 업로드 상태 머신
@@ -24,6 +28,52 @@ const IMAGE_OPTIMIZATION = {
   MAX_HEIGHT: 1920,
   JPEG_QUALITY: 0.8,
 } as const;
+
+/**
+ * PDF 를 이미지로 변환 (첫 페이지)
+ */
+async function convertPdfToImage(file: File): Promise<Blob> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await PDFJS.getDocument({ data: arrayBuffer }).promise;
+
+      // 첫 페이지 렌더링
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 2.0 }); // 고해상도
+
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context 를 생성할 수 없습니다.'));
+        return;
+      }
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+      }).promise;
+
+      // JPEG 로 변환
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error('이미지 변환에 실패했습니다.'));
+            return;
+          }
+          resolve(blob);
+        },
+        'image/jpeg',
+        IMAGE_OPTIMIZATION.JPEG_QUALITY
+      );
+    } catch (error) {
+      reject(new Error('PDF 변환 중 오류가 발생했습니다.'));
+    }
+  });
+}
 
 /**
  * Canvas 를 사용하여 이미지 리사이징 및 최적화
@@ -84,6 +134,17 @@ async function optimizeImage(file: File): Promise<Blob> {
 }
 
 /**
+ * 파일 타입에 따라 적절한 변환 함수 선택
+ */
+async function processFile(file: File): Promise<Blob> {
+  if (file.type === 'application/pdf') {
+    return convertPdfToImage(file);
+  } else {
+    return optimizeImage(file);
+  }
+}
+
+/**
  * 메인 페이지 컴포넌트
  */
 export default function Home() {
@@ -99,17 +160,24 @@ export default function Home() {
       // 1. UPLOADING 상태로 전환
       setState({ status: 'UPLOADING', progress: 0 });
 
-      // 2. 이미지 최적화
-      const optimizedBlob = await optimizeImage(file);
+      // 2. 파일 타입에 따라 변환 (PDF 또는 이미지)
+      const isPdf = file.type === 'application/pdf';
+      const optimizedBlob = await processFile(file);
       setState((prev) => ({ ...prev, progress: 30 }));
 
-      // 3. FormData 생성
+      // 3. FormData 생성 (원본 파일명 유지)
       const formData = new FormData();
-      formData.append('file', optimizedBlob, file.name);
+      const outputFilename = isPdf 
+        ? file.name.replace(/\.pdf$/i, '.jpg') 
+        : file.name;
+      formData.append('file', optimizedBlob, outputFilename);
       setState((prev) => ({ ...prev, progress: 50 }));
 
       // 4. API 호출
-      setState({ status: 'GENERATING', message: 'Gemini AI 가 수식을 판별하고 있습니다...' });
+      const processingMessage = isPdf
+        ? 'PDF 를 이미지로 변환 중입니다...'
+        : 'Gemini AI 가 수식을 판별하고 있습니다...';
+      setState({ status: 'GENERATING', message: processingMessage });
 
       const response = await fetch('/api/process', {
         method: 'POST',
@@ -124,7 +192,7 @@ export default function Home() {
       // 5. HWPX 파일 다운로드 처리
       const blob = await response.blob();
       const contentDisposition = response.headers.get('Content-Disposition');
-      
+
       // 파일명 추출
       let filename = 'exam.hwpx';
       if (contentDisposition) {
@@ -145,10 +213,10 @@ export default function Home() {
       URL.revokeObjectURL(downloadUrl);
 
       // 7. SUCCESS 상태로 전환
-      setState({ 
-        status: 'SUCCESS', 
+      setState({
+        status: 'SUCCESS',
         message: `${filename} 파일이 다운로드되었습니다.`,
-        filename 
+        filename
       });
 
     } catch (error) {
@@ -207,7 +275,7 @@ export default function Home() {
               Gemini 기반 HWPX 시험지 복원
             </h2>
             <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
-              시험지 이미지를 업로드하면 AI 가 문제와 수식을 자동으로 추출하여
+              시험지 이미지 또는 PDF 를 업로드하면 AI 가 문제와 수식을 자동으로 추출하여
               HWPX 파일로 변환해드립니다.
             </p>
           </section>
@@ -219,6 +287,8 @@ export default function Home() {
               <FileUploader
                 onFileSelect={handleFileSelect}
                 disabled={state.status === 'UPLOADING' || state.status === 'GENERATING'}
+                accept="image/*,application/pdf"
+                maxSize={20 * 1024 * 1024}
               />
 
               {/* 상태 메시지 */}
@@ -261,7 +331,7 @@ export default function Home() {
             <ul className="space-y-3 text-gray-600 dark:text-gray-400">
               <li className="flex items-start gap-2">
                 <span className="text-blue-500 font-bold">1.</span>
-                <span>시험지 이미지를 촬영하거나 스캔합니다.</span>
+                <span>시험지 이미지 (PNG, JPG) 또는 PDF 파일을 준비합니다.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-blue-500 font-bold">2.</span>
@@ -276,6 +346,12 @@ export default function Home() {
                 <span>변환된 파일을 자동으로 다운로드합니다.</span>
               </li>
             </ul>
+            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+              <p className="text-sm text-blue-700 dark:text-blue-300">
+                <span className="font-bold">💡 팁:</span> PDF 는 첫 페이지만 처리되며, 
+                이미지는 자동으로 최적화되어 업로드됩니다 (최대 20MB).
+              </p>
+            </div>
           </section>
         </main>
 
