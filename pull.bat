@@ -2,7 +2,7 @@
 chcp 65001 >nul
 echo Pulling latest changes from remote repository...
 
-git pull origin main
+git pull
 
 echo.
 echo Pull complete!

@@ -12,7 +12,7 @@ git commit -m "%message%"
 
 echo.
 echo Pushing to remote repository...
-git push origin main
+git push
 
 echo.
 echo Push complete!
