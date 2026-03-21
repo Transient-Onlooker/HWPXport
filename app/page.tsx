@@ -182,6 +182,10 @@ export default function Home() {
     }
     return false;
   });
+  const [debugData, setDebugData] = useState<{
+    images: { url: string; name: string }[];
+    jsonResponse: string;
+  }>({ images: [], jsonResponse: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // darkMode 변경 시 html 태그에 클래스 적용
@@ -206,12 +210,14 @@ export default function Home() {
       const totalFiles = files.length;
       const allHwpxFiles: Blob[] = [];
       let lastResponse: Response | null = null;
+      const processedImages: { url: string; name: string }[] = [];
+      let lastJsonResponse = '';
 
       // 2. 각 파일을 순차적으로 처리
       for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
         const file = files[fileIndex];
         const isPdf = file.type === 'application/pdf';
-        
+
         // 파일 변환 (PDF 는 모든 페이지, 이미지는 단일)
         const optimizedBlobs = await processFile(file);
         const pageBlobs = optimizedBlobs.length;
@@ -221,6 +227,13 @@ export default function Home() {
           const optimizedBlob = optimizedBlobs[i];
           const pageNum = i + 1;
           const currentFileNum = fileIndex + 1;
+
+          // 디버그용 이미지 URL 생성
+          const imageUrl = URL.createObjectURL(optimizedBlob);
+          const imageName = isPdf
+            ? `${file.name.replace(/\.pdf$/i, '')}_p${pageNum}.jpg`
+            : file.name;
+          processedImages.push({ url: imageUrl, name: imageName });
 
           // 진행 상황 업데이트
           const overallProgress = Math.floor(((fileIndex + (i + 1) / pageBlobs) / totalFiles) * 100);
@@ -263,6 +276,17 @@ export default function Home() {
           console.log('[Upload] Received blob:', blob.type, blob.size);
           allHwpxFiles.push(blob);
           lastResponse = response;
+          
+          // JSON 응답 헤더 읽기
+          const examDataHeader = response.headers.get('X-Exam-Data');
+          if (examDataHeader) {
+            try {
+              const decoded = atob(examDataHeader);
+              lastJsonResponse = decoded;
+            } catch (e) {
+              console.error('[Upload] Failed to parse JSON header:', e);
+            }
+          }
         }
       }
 
@@ -295,7 +319,13 @@ export default function Home() {
       document.body.removeChild(link);
       URL.revokeObjectURL(downloadUrl);
 
-      // 6. SUCCESS 상태로 전환
+      // 6. 디버그 데이터 저장
+      setDebugData({
+        images: processedImages,
+        jsonResponse: lastJsonResponse,
+      });
+
+      // 7. SUCCESS 상태로 전환
       setState({
         status: 'SUCCESS',
         message: `총 ${totalFiles}개 파일 처리 완료. ${filename} 파일이 다운로드되었습니다.`,
@@ -316,10 +346,13 @@ export default function Home() {
    */
   const handleReset = useCallback(() => {
     setState({ status: 'IDLE' });
+    // 디버그 이미지 URL 정리
+    debugData.images.forEach((img) => URL.revokeObjectURL(img.url));
+    setDebugData({ images: [], jsonResponse: '' });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, []);
+  }, [debugData.images]);
 
   /**
    * 다크모드 토글
@@ -405,6 +438,73 @@ export default function Home() {
             </div>
           </section>
 
+          {/* 디버그 섹션 - 처리된 이미지 및 JSON 확인 */}
+          {state.status === 'SUCCESS' && debugData.images.length > 0 && (
+            <section className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 mb-8">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <span>🔍</span> 디버그 정보
+              </h3>
+              
+              {/* 처리된 이미지 미리보기 */}
+              <div className="mb-6">
+                <h4 className="text-md font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                  처리된 이미지 ({debugData.images.length}개)
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {debugData.images.map((img, index) => (
+                    <div key={index} className="group relative">
+                      <img
+                        src={img.url}
+                        alt={img.name}
+                        className="w-full h-40 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                      />
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                        <a
+                          href={img.url}
+                          download={img.name}
+                          className="px-4 py-2 bg-white text-gray-900 rounded-lg font-medium hover:bg-gray-100 transition-colors"
+                        >
+                          다운로드
+                        </a>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
+                        {img.name}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* JSON 응답 */}
+              {debugData.jsonResponse && (
+                <div>
+                  <h4 className="text-md font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                    AI 응답 JSON
+                  </h4>
+                  <div className="relative">
+                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto max-h-96 text-sm">
+                      <code>{debugData.jsonResponse}</code>
+                    </pre>
+                    <button
+                      onClick={() => {
+                        const blob = new Blob([debugData.jsonResponse], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = 'response.json';
+                        link.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="absolute top-2 right-2 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+                    >
+                      JSON 다운로드
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* 사용 가이드 */}
           <section className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
             <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
@@ -444,5 +544,6 @@ export default function Home() {
           </div>
         </footer>
       </div>
+    </div>
   );
 }

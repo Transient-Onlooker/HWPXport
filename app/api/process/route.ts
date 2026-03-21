@@ -256,10 +256,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ProcessRe
     const filename = generateHwpxFilename(examData.title);
     const encodedFilename = encodeURIComponent(filename).replace(/'/g, '%27');
     
+    // JSON 데이터를 커스텀 헤더에 포함 (Base64 인코딩)
+    const jsonData = Buffer.from(JSON.stringify(examData, null, 2)).toString('base64');
+
     return new NextResponse(hwpxBuffer, {
       headers: {
         'Content-Type': 'application/vnd.hanplus.hwpx',
         'Content-Disposition': `attachment; filename*=UTF-8''${encodedFilename}`,
+        'X-Exam-Data': jsonData,
       },
     });
   } catch (error) {
