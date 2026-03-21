@@ -3,10 +3,17 @@
 import { useState, useCallback, useRef } from 'react';
 import { FileUploader } from '@/components/FileUploader';
 import { StatusMessage } from '@/components/StatusMessage';
-import * as PDFJS from 'pdfjs-dist';
 
-// PDF.js 워커 설정 (CDN 사용)
-PDFJS.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${PDFJS.version}/build/pdf.worker.min.mjs`;
+// PDF.js 는 동적 import 사용 (서버 사이드 에러 방지)
+let PDFJS: typeof import('pdfjs-dist') | null = null;
+
+async function loadPDFJS() {
+  if (!PDFJS) {
+    PDFJS = await import('pdfjs-dist');
+    PDFJS.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${PDFJS.version}/build/pdf.worker.min.mjs`;
+  }
+  return PDFJS;
+}
 
 /**
  * 업로드 상태 머신
@@ -35,8 +42,9 @@ const IMAGE_OPTIMIZATION = {
 async function convertPdfToImage(file: File): Promise<Blob[]> {
   return new Promise(async (resolve, reject) => {
     try {
+      const pdfjs = await loadPDFJS();
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await PDFJS.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
       const images: Blob[] = [];
 
       // 모든 페이지 순회
