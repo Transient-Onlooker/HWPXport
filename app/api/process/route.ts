@@ -14,9 +14,9 @@ import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // 모델 상수
-const MODEL_ROUTER = 'gemini-2.0-flash-lite-latest';  // 복잡도 판별용 (저비용)
-const MODEL_PARSER_COMPLEX = 'gemini-2.0-flash-latest';        // 정밀 파싱용 (복잡한 수식)
-const MODEL_PARSER_SIMPLE = 'gemini-2.0-flash-latest';         // 빠른 파싱용 (텍스트 중심)
+const MODEL_ROUTER = 'gemini-2.5-flash-lite-preview';   // 복잡도 판별용 (저비용)
+const MODEL_PARSER_COMPLEX = 'gemini-2.5-flash-latest'; // 정밀 파싱용 (복잡한 수식)
+const MODEL_PARSER_SIMPLE = 'gemini-2.5-flash-latest';  // 빠른 파싱용 (텍스트 중심)
 
 /**
  * Gemini response schema (ExamData 구조)
