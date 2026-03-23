@@ -20,6 +20,19 @@ async function loadPDFJS() {
 
 type UploadStatus = 'IDLE' | 'UPLOADING' | 'GENERATING' | 'SUCCESS' | 'ERROR';
 
+interface ExamQuestion {
+  number: number;
+  text: string;
+  boxContext: string[];
+  needsFigure: boolean;
+  options: string[];
+}
+
+interface ExamData {
+  title: string;
+  questions: ExamQuestion[];
+}
+
 interface UploadState {
   status: UploadStatus;
   message?: string;
@@ -40,6 +53,74 @@ type ProcessedInput =
 
 function isJsonFile(file: File): boolean {
   return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
+}
+
+function extractJsonObject(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed;
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  return trimmed;
+}
+
+function removeTrailingCommas(jsonText: string): string {
+  return jsonText.replace(/,\s*([}\]])/g, '$1');
+}
+
+function parseJsonExamData(rawText: string): ExamData {
+  return JSON.parse(removeTrailingCommas(extractJsonObject(rawText))) as ExamData;
+}
+
+async function mergeJsonFiles(files: File[]): Promise<File> {
+  const parsedBlocks = await Promise.all(
+    files.map(async (file) => ({
+      name: file.name,
+      data: parseJsonExamData(await file.text()),
+    }))
+  );
+
+  const title = parsedBlocks.find((block) => block.data.title?.trim())?.data.title?.trim();
+  if (!title) {
+    throw new Error('Merged JSON blocks need at least one non-empty title.');
+  }
+
+  const incompatible = parsedBlocks.find(
+    (block) => block.data.title?.trim() && block.data.title.trim() !== title
+  );
+  if (incompatible) {
+    throw new Error(`JSON block title mismatch: ${incompatible.name}`);
+  }
+
+  const questionMap = new Map<number, ExamQuestion>();
+  for (const block of parsedBlocks) {
+    for (const question of block.data.questions ?? []) {
+      if (typeof question.number !== 'number') {
+        throw new Error(`Invalid question number in ${block.name}`);
+      }
+      questionMap.set(question.number, question);
+    }
+  }
+
+  const merged: ExamData = {
+    title,
+    questions: Array.from(questionMap.values()).sort((a, b) => a.number - b.number),
+  };
+
+  return new File([JSON.stringify(merged, null, 2)], 'merged-exam-data.json', {
+    type: 'application/json',
+  });
 }
 
 async function convertPdfToImage(file: File): Promise<Blob[]> {
@@ -176,14 +257,17 @@ export default function Home() {
     try {
       setState({ status: 'UPLOADING', progress: 0, message: 'Preparing files...' });
 
-      const totalFiles = files.length;
+      const normalizedFiles =
+        files.length > 1 && files.every(isJsonFile) ? [await mergeJsonFiles(files)] : files;
+
+      const totalFiles = normalizedFiles.length;
       const allHwpxFiles: Blob[] = [];
       const processedImages: { url: string; name: string }[] = [];
       let lastResponse: Response | null = null;
       let lastJsonResponse = '';
 
-      for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
-        const file = files[fileIndex];
+      for (let fileIndex = 0; fileIndex < normalizedFiles.length; fileIndex++) {
+        const file = normalizedFiles[fileIndex];
         const processed = await processFile(file);
         const totalParts = processed.blobs.length;
 
@@ -259,11 +343,11 @@ export default function Home() {
       const contentDisposition = lastResponse?.headers.get('Content-Disposition');
       let filename = 'exam.hwpx';
 
-      if (files.length === 1) {
-        if (isJsonFile(files[0])) {
-          filename = files[0].name.replace(/\.json$/i, '.hwpx');
-        } else if (files[0].type === 'application/pdf') {
-          filename = files[0].name.replace(/\.pdf$/i, '.hwpx');
+      if (normalizedFiles.length === 1) {
+        if (isJsonFile(normalizedFiles[0])) {
+          filename = normalizedFiles[0].name.replace(/\.json$/i, '.hwpx');
+        } else if (normalizedFiles[0].type === 'application/pdf') {
+          filename = normalizedFiles[0].name.replace(/\.pdf$/i, '.hwpx');
         }
       }
 

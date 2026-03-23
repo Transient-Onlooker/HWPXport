@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
-import { ExamData } from '../types';
+import { ContextLabel, ExamData } from '../types';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(MODULE_DIR, '..', '..');
@@ -30,13 +30,15 @@ const SECTION_XMLNS = [
 ].join(' ');
 
 const TEXT_CHAR_PR = 6;
-const BOLD_CHAR_PR = 7;
-const TITLE_PARA_PR = 13;
-const TITLE_STYLE_ID = 0;
+const BOLD_CHAR_PR = 9;
+const UNDERLINE_CHAR_PR = 10;
 const BODY_PARA_PR = 13;
 const BODY_STYLE_ID = 0;
 const BOX_PARA_PR = 11;
 const BOX_STYLE_ID = 15;
+const FIGURE_NOTICE_PARA_PR = 11;
+const FIGURE_NOTICE_STYLE_ID = 15;
+const OPTION_SYMBOLS = ['\u2460', '\u2461', '\u2462', '\u2463', '\u2464'];
 
 function escapeXml(text: string): string {
   return text
@@ -51,34 +53,59 @@ function stripMarkdown(text: string): string {
   return text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`(.+?)`/g, '$1');
 }
 
-function splitMarkdownRuns(text: string): Array<{ text: string; bold: boolean }> {
-  const runs: Array<{ text: string; bold: boolean }> = [];
-  const regex = /\*\*(.+?)\*\*/g;
+function splitMarkdownRuns(
+  text: string
+): Array<{ text: string; bold: boolean; underline: boolean }> {
+  const runs: Array<{ text: string; bold: boolean; underline: boolean }> = [];
+  const regex = /(\*\*(.+?)\*\*)|(__(.+?)__)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      runs.push({ text: text.slice(lastIndex, match.index), bold: false });
+      runs.push({ text: text.slice(lastIndex, match.index), bold: false, underline: false });
     }
-    runs.push({ text: match[1], bold: true });
+
+    if (match[2] !== undefined) {
+      runs.push({ text: match[2], bold: true, underline: false });
+    } else if (match[4] !== undefined) {
+      runs.push({ text: match[4], bold: false, underline: true });
+    }
+
     lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    runs.push({ text: text.slice(lastIndex), bold: false });
+    runs.push({ text: text.slice(lastIndex), bold: false, underline: false });
   }
 
-  return runs.length > 0 ? runs : [{ text, bold: false }];
+  return runs.length > 0 ? runs : [{ text, bold: false, underline: false }];
 }
 
 function buildTextRuns(text: string): string {
   return splitMarkdownRuns(text)
     .filter((run) => run.text.length > 0)
     .map((run) => {
-      const charPrId = run.bold ? BOLD_CHAR_PR : TEXT_CHAR_PR;
+      const charPrId = run.bold
+        ? BOLD_CHAR_PR
+        : run.underline
+          ? UNDERLINE_CHAR_PR
+          : TEXT_CHAR_PR;
       const content = escapeXml(run.text.replace(/`/g, ''));
       return `<hp:run charPrIDRef="${charPrId}"><hp:t>${content}</hp:t></hp:run>`;
+    })
+    .join('');
+}
+
+function buildTextRunsWithBreaks(lines: string[]): string {
+  return lines
+    .filter((line) => line.length > 0)
+    .map((line, index) => {
+      const lineXml = buildTextRuns(line);
+      if (index === 0) {
+        return lineXml;
+      }
+      return `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:lineBreak/></hp:run>${lineXml}`;
     })
     .join('');
 }
@@ -93,26 +120,36 @@ function buildParagraph(
 }
 
 function buildQuestionParagraph(question: ExamData['questions'][number], paraId: number): string {
-  const prefix = `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${question.number}.</hp:t></hp:run><hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t> </hp:t></hp:run>`;
+  const prefix =
+    `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${question.number}.</hp:t></hp:run>` +
+    `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t> </hp:t></hp:run>`;
   return buildParagraph(paraId, BODY_PARA_PR, BODY_STYLE_ID, `${prefix}${buildTextRuns(question.text)}`);
+}
+
+function buildFigureNoticeParagraph(questionNumber: number, paraId: number): string {
+  return buildParagraph(
+    paraId,
+    FIGURE_NOTICE_PARA_PR,
+    FIGURE_NOTICE_STYLE_ID,
+    `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${escapeXml(`[${questionNumber}번 문제: 그림 삽입 필요]`)}</hp:t></hp:run>`
+  );
 }
 
 function buildOptionsParagraphs(
   options: string[],
   startParaId: number
 ): { xml: string; nextParaId: number } {
-  const symbols = ['①', '②', '③', '④', '⑤'];
   const paragraphs: string[] = [];
   let paraId = startParaId;
 
   options.slice(0, 5).forEach((option, index) => {
-    const text = `${symbols[index] ?? '-'} ${stripMarkdown(option)}`;
+    const symbol = escapeXml(OPTION_SYMBOLS[index] ?? '-');
     paragraphs.push(
       buildParagraph(
         paraId++,
         BODY_PARA_PR,
         BODY_STYLE_ID,
-        `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(text)}</hp:t></hp:run>`
+        `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${symbol} </hp:t></hp:run>${buildTextRuns(option)}`
       )
     );
   });
@@ -121,13 +158,38 @@ function buildOptionsParagraphs(
 }
 
 function buildBoxParagraph(boxContext: string[], paraId: number): string {
-  const text = boxContext.map(stripMarkdown).join(' / ');
-  return buildParagraph(
-    paraId,
-    BOX_PARA_PR,
-    BOX_STYLE_ID,
-    `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(text)}</hp:t></hp:run>`
-  );
+  return buildParagraph(paraId, BOX_PARA_PR, BOX_STYLE_ID, buildTextRuns(boxContext.join(' / ')));
+}
+
+function getContextLabelPrefix(contextLabel: ContextLabel | undefined): string {
+  switch (contextLabel) {
+    case 'passage':
+      return '[지문] ';
+    case 'condition':
+      return '[조건] ';
+    case 'data':
+      return '[자료] ';
+    case 'example':
+      return '[보기] ';
+    default:
+      return '';
+  }
+}
+
+function buildContextParagraph(
+  boxContext: string[],
+  contextLabel: ContextLabel | undefined,
+  paraId: number
+): string {
+  const prefix = getContextLabelPrefix(contextLabel);
+  const preserveLineBreaks = contextLabel === 'passage' || contextLabel === 'condition' || contextLabel === 'data';
+  if (preserveLineBreaks) {
+    const lines = boxContext.map((line, index) => (index === 0 && prefix ? `${prefix}${line}` : line));
+    return buildParagraph(paraId, BOX_PARA_PR, BOX_STYLE_ID, buildTextRunsWithBreaks(lines));
+  }
+
+  const content = prefix ? `${prefix}${boxContext.join(' / ')}` : boxContext.join(' / ');
+  return buildParagraph(paraId, BOX_PARA_PR, BOX_STYLE_ID, buildTextRuns(content));
 }
 
 function buildSectionPreamble(title: string): string {
@@ -167,8 +229,12 @@ function buildSectionXml(examData: ExamData): string {
   for (const question of examData.questions) {
     paragraphs.push(buildQuestionParagraph(question, paraId++));
 
+    if (question.needsFigure) {
+      paragraphs.push(buildFigureNoticeParagraph(question.number, paraId++));
+    }
+
     if (question.boxContext.length > 0) {
-      paragraphs.push(buildBoxParagraph(question.boxContext, paraId++));
+      paragraphs.push(buildContextParagraph(question.boxContext, question.contextLabel, paraId++));
     }
 
     if (question.options.length > 0) {
@@ -190,12 +256,19 @@ function buildPreviewText(examData: ExamData): string {
 
   for (const question of examData.questions) {
     lines.push(`${question.number}. ${stripMarkdown(question.text)}`);
+
+    if (question.needsFigure) {
+      lines.push(`[${question.number}번 문제: 그림 삽입 필요]`);
+    }
     if (question.boxContext.length > 0) {
-      lines.push(`[BOX] ${question.boxContext.map(stripMarkdown).join(' / ')}`);
+      const prefix = getContextLabelPrefix(question.contextLabel).trim() || 'BOX';
+      lines.push(`[${prefix}] ${stripMarkdown(question.boxContext[0])}`);
+      question.boxContext.slice(1).forEach((line) => lines.push(stripMarkdown(line)));
     }
     if (question.options.length > 0) {
       lines.push(question.options.map(stripMarkdown).join(' | '));
     }
+
     lines.push('');
   }
 

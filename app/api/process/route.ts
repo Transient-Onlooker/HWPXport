@@ -32,15 +32,23 @@ const EXAM_DATA_SCHEMA: Schema = {
           boxContext: {
             type: SchemaType.ARRAY,
             items: { type: SchemaType.STRING },
-            description: 'Boxed context lines',
+            description: 'Detached context block lines only when visually present in the source',
+          },
+          contextLabel: {
+            type: SchemaType.STRING,
+            description: 'Context kind: box, passage, condition, data, or example',
+          },
+          needsFigure: {
+            type: SchemaType.BOOLEAN,
+            description: 'Whether the question needs manual figure insertion later',
           },
           options: {
             type: SchemaType.ARRAY,
             items: { type: SchemaType.STRING },
-            description: 'Answer choices',
+            description: 'Answer choices without numbering prefixes',
           },
         },
-        required: ['number', 'text', 'boxContext', 'options'],
+        required: ['number', 'text', 'boxContext', 'needsFigure', 'options'],
       },
     },
   },
@@ -61,10 +69,32 @@ Respond ONLY with valid JSON in this exact format:
 No explanations, no additional text.
 `;
 
+const PARSER_SHARED_RULES = `
+Critical extraction rules:
+1. Keep Korean text exactly as shown whenever it is visible.
+2. Never replace visible source text with placeholders such as "...", "(본문 생략)", "(지문 생략)", "요약", or similar shortened text unless those exact words are literally printed in the source.
+3. If a passage is long, still transcribe the visible text in full instead of abbreviating it.
+4. Preserve underlined, bold, boxed, or otherwise emphasized phrases with markdown bold syntax like **this**.
+5. If a question contains a graph, chart, diagram, table, chemical structure, or other important non-text figure that should later be inserted manually, set "needsFigure" to true. Otherwise set it to false.
+6. If boxContext contains a detached block, classify it with contextLabel:
+   - "passage" for long reading passages or shared stems
+   - "condition" for answer conditions or constraints
+   - "data" for data blocks, tables, or reference materials
+   - "example" for 보기/example statement blocks
+   - "box" for generic boxed content when the type is unclear
+7. If a shared passage header exists, such as "[1-3] ..." or "다음 글을 읽고 ...", include that header inside boxContext and use contextLabel "passage" instead of merging it into the main question text.
+8. Keep each visible passage line as a separate boxContext item when possible, especially for long reading passages.
+9. For multiple-choice questions, return each option as plain option text only. Do not include leading numbering markers such as "①", "(1)", "1.", or similar prefixes.
+10. boxContext is optional. If there is no clearly visible detached block in the source, use [].
+11. Never invent quotations, summaries, omitted text, background explanations, or reconstructed passage lines that are not visibly present in the source.
+12. When uncertain whether a detached block really exists, leave boxContext empty instead of guessing.
+13. Return ONLY JSON matching the schema.
+`;
+
 const PARSER_PROMPT_COMPLEX = `
 You are an expert HWP formula parser. Your task is to extract exam questions from Korean test images with perfect mathematical notation.
 
-Critical rules:
+Math normalization rules:
 1. Fractions: \`n over 2\`
 2. Square root: \`sqrt{3}\`
 3. Superscript: \`x^2\`
@@ -72,26 +102,24 @@ Critical rules:
 5. Summation: \`sum from i=1 to n\`
 6. Product: \`prod from i=1 to n\`
 7. Integral: \`int from a to b\`
-8. Emphasis or underline: markdown \`**text**\`
-9. Keep Korean text exactly as shown
-10. Return ONLY JSON matching the schema
+
+${PARSER_SHARED_RULES}
 `;
 
 const PARSER_PROMPT_SIMPLE = `
 You are an exam text extraction specialist. Extract questions from Korean test images.
 
-Rules:
-1. Emphasis or underline: markdown \`**text**\`
-2. Keep Korean text exactly as shown
-3. Basic math may use \`n over 2\`, \`x^2\`, \`sqrt{3}\`
-4. Return ONLY JSON matching the schema
+Basic math may use \`n over 2\`, \`x^2\`, \`sqrt{3}\`.
+
+${PARSER_SHARED_RULES}
 `;
 
 async function processImageFile(file: File): Promise<{ data: string; mimeType: string }> {
   const arrayBuffer = await file.arrayBuffer();
-  const base64Data = Buffer.from(arrayBuffer).toString('base64');
-  const mimeType = file.type || 'image/png';
-  return { data: base64Data, mimeType };
+  return {
+    data: Buffer.from(arrayBuffer).toString('base64'),
+    mimeType: file.type || 'image/png',
+  };
 }
 
 function isJsonFile(file: File): boolean {
@@ -123,12 +151,47 @@ function removeTrailingCommas(jsonText: string): string {
   return jsonText.replace(/,\s*([}\]])/g, '$1');
 }
 
+function stripOptionPrefix(option: string): string {
+  return option.replace(/^\s*(?:\(?\d+\)?[.:]?|[①②③④⑤⑥⑦⑧⑨⑩])\s*/u, '').trim();
+}
+
+function isHallucinatedBoxContextLine(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return [
+    '본문 생략',
+    '지문 생략',
+    '앞부분 줄거리',
+    '줄거리',
+    '요약',
+    '생략',
+    '본문 요약',
+    '배경 설명',
+  ].some((token) => normalized.includes(token));
+}
+
+function normalizeExamData(examData: ExamData): ExamData {
+  return {
+    title: examData.title.trim(),
+    questions: examData.questions.map((question) => ({
+      ...question,
+      contextLabel: question.contextLabel ?? 'box',
+      needsFigure: question.needsFigure === true,
+      text: question.text.trim(),
+      boxContext: question.boxContext
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+        .filter((value) => !isHallucinatedBoxContextLine(value)),
+      options: question.options.map(stripOptionPrefix).filter((value) => value.length > 0),
+    })),
+  };
+}
+
 function parseUploadedExamData(rawText: string): ExamData {
   const extracted = extractJsonObject(rawText);
   const sanitized = removeTrailingCommas(extracted);
 
   try {
-    const examData = JSON.parse(sanitized);
+    const examData = normalizeExamData(JSON.parse(sanitized));
     validateExamData(examData);
     return examData;
   } catch (error) {
@@ -167,6 +230,12 @@ function validateExamData(data: unknown): asserts data is ExamData {
     }
     if (typeof item.text !== 'string') {
       throw new Error(`Question ${index + 1} needs a text string.`);
+    }
+    if (item.contextLabel !== undefined && typeof item.contextLabel !== 'string') {
+      throw new Error(`Question ${index + 1} has an invalid contextLabel.`);
+    }
+    if (typeof item.needsFigure !== 'boolean') {
+      throw new Error(`Question ${index + 1} needs a boolean needsFigure field.`);
     }
     if (!Array.isArray(item.boxContext) || !item.boxContext.every((value) => typeof value === 'string')) {
       throw new Error(`Question ${index + 1} has an invalid boxContext.`);
@@ -213,7 +282,6 @@ async function runParser(
     },
   });
 
-  const prompt = isComplex ? PARSER_PROMPT_COMPLEX : PARSER_PROMPT_SIMPLE;
   const result = await model.generateContent([
     {
       inlineData: {
@@ -221,10 +289,10 @@ async function runParser(
         mimeType: imageData.mimeType,
       },
     },
-    prompt,
+    isComplex ? PARSER_PROMPT_COMPLEX : PARSER_PROMPT_SIMPLE,
   ]);
 
-  const examData: ExamData = JSON.parse(result.response.text());
+  const examData = normalizeExamData(JSON.parse(result.response.text()));
   validateExamData(examData);
   return examData;
 }
@@ -249,17 +317,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const file = formData.get('file') as File | null;
 
     if (!file) {
-      return NextResponse.json(
-        { success: false, error: 'File was not provided.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: 'File was not provided.' }, { status: 400 });
     }
 
     if (isJsonFile(file)) {
-      const rawText = await file.text();
-      const examData = parseUploadedExamData(rawText);
-      const hwpxBuffer = await buildHwpx(examData);
-      return buildHwpxResponse(examData, hwpxBuffer);
+      const examData = parseUploadedExamData(await file.text());
+      return buildHwpxResponse(examData, await buildHwpx(examData));
     }
 
     if (!GEMINI_API_KEY) {
@@ -272,9 +335,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const imageData = await processImageFile(file);
     const isComplex = await runRouter(imageData);
     const examData = await runParser(imageData, isComplex);
-    const hwpxBuffer = await buildHwpx(examData);
 
-    return buildHwpxResponse(examData, hwpxBuffer);
+    return buildHwpxResponse(examData, await buildHwpx(examData));
   } catch (error) {
     console.error('[process] Error:', error);
     return NextResponse.json(
