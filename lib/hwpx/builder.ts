@@ -31,12 +31,10 @@ const SECTION_XMLNS = [
 
 const TEXT_CHAR_PR = 6;
 const BOLD_CHAR_PR = 7;
-const TITLE_PARA_PR = 16;
-const TITLE_STYLE_ID = 2;
+const TITLE_PARA_PR = 13;
+const TITLE_STYLE_ID = 0;
 const BODY_PARA_PR = 13;
 const BODY_STYLE_ID = 0;
-const OPTION_PARA_PR = 14;
-const OPTION_STYLE_ID = 3;
 const BOX_PARA_PR = 11;
 const BOX_STYLE_ID = 15;
 
@@ -95,7 +93,7 @@ function buildParagraph(
 }
 
 function buildQuestionParagraph(question: ExamData['questions'][number], paraId: number): string {
-  const prefix = `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${question.number}.</hp:t></hp:run><hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:nbSpace/><hp:fwSpace/></hp:run>`;
+  const prefix = `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${question.number}.</hp:t></hp:run><hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t> </hp:t></hp:run>`;
   return buildParagraph(paraId, BODY_PARA_PR, BODY_STYLE_ID, `${prefix}${buildTextRuns(question.text)}`);
 }
 
@@ -103,7 +101,7 @@ function buildOptionsParagraphs(
   options: string[],
   startParaId: number
 ): { xml: string; nextParaId: number } {
-  const symbols = ['(1)', '(2)', '(3)', '(4)', '(5)'];
+  const symbols = ['①', '②', '③', '④', '⑤'];
   const paragraphs: string[] = [];
   let paraId = startParaId;
 
@@ -112,8 +110,8 @@ function buildOptionsParagraphs(
     paragraphs.push(
       buildParagraph(
         paraId++,
-        OPTION_PARA_PR,
-        OPTION_STYLE_ID,
+        BODY_PARA_PR,
+        BODY_STYLE_ID,
         `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(text)}</hp:t></hp:run>`
       )
     );
@@ -148,7 +146,6 @@ function buildSectionPreamble(title: string): string {
     '<hp:pageBorderFill type="EVEN" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>',
     '<hp:pageBorderFill type="ODD" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>',
     '</hp:secPr>',
-    '</hp:run>',
     '<hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="1" sameGap="2268"><hp:colLine type="SOLID" width="0.4 mm" color="#000000"/></hp:colPr></hp:ctrl>',
     '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>',
     '<hp:ctrl><hp:footer id="0" applyPageType="BOTH"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="BOTTOM" linkListIDRef="0" linkListNextIDRef="0" textWidth="48190" textHeight="4251" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="2" styleIDRef="10" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="2"/></hp:p></hp:subList></hp:footer></hp:ctrl>',
@@ -157,24 +154,15 @@ function buildSectionPreamble(title: string): string {
     `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(title)}</hp:t></hp:run>`,
     '</hp:p>',
     '</hp:subList></hp:header></hp:ctrl>',
+    '<hp:t></hp:t>',
+    '</hp:run>',
     '</hp:p>',
   ].join('');
-}
-
-function buildTitleParagraph(title: string, paraId: number): string {
-  return buildParagraph(
-    paraId,
-    TITLE_PARA_PR,
-    TITLE_STYLE_ID,
-    `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${escapeXml(title)}</hp:t></hp:run>`
-  );
 }
 
 function buildSectionXml(examData: ExamData): string {
   const paragraphs: string[] = [];
   let paraId = 2;
-
-  paragraphs.push(buildTitleParagraph(examData.title, paraId++));
 
   for (const question of examData.questions) {
     paragraphs.push(buildQuestionParagraph(question, paraId++));

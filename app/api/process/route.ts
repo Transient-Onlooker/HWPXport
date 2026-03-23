@@ -98,6 +98,50 @@ function isJsonFile(file: File): boolean {
   return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
 }
 
+function extractJsonObject(rawText: string): string {
+  const trimmed = rawText.trim();
+
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed;
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  return trimmed;
+}
+
+function removeTrailingCommas(jsonText: string): string {
+  return jsonText.replace(/,\s*([}\]])/g, '$1');
+}
+
+function parseUploadedExamData(rawText: string): ExamData {
+  const extracted = extractJsonObject(rawText);
+  const sanitized = removeTrailingCommas(extracted);
+
+  try {
+    const examData = JSON.parse(sanitized);
+    validateExamData(examData);
+    return examData;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(
+        `Uploaded JSON is invalid. Remove comments/explanations and ensure commas and quotes are valid. ${error.message}`
+      );
+    }
+
+    throw error;
+  }
+}
+
 function validateExamData(data: unknown): asserts data is ExamData {
   if (!data || typeof data !== 'object') {
     throw new Error('JSON root must be an object.');
@@ -213,8 +257,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     if (isJsonFile(file)) {
       const rawText = await file.text();
-      const examData = JSON.parse(rawText);
-      validateExamData(examData);
+      const examData = parseUploadedExamData(rawText);
       const hwpxBuffer = await buildHwpx(examData);
       return buildHwpxResponse(examData, hwpxBuffer);
     }

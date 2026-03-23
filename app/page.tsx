@@ -318,7 +318,7 @@ export default function Home() {
       <header className="sticky top-0 z-10 backdrop-blur-md bg-white/70 dark:bg-gray-900/70 border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">HWPX Port</h1>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">HWPXport</h1>
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Image/PDF to HWPX, or JSON to HWPX without Gemini cost
             </p>

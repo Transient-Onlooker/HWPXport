@@ -3,7 +3,7 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 echo ========================================
-echo   HWPX Port - Dev Server
+echo   HWPXport - Dev Server
 echo ========================================
 echo.
 echo Local URL: http://localhost:3000

@@ -3,7 +3,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'HWPX Port',
+  title: 'HWPXport',
   description: 'Convert exam images, PDFs, or saved JSON into HWPX documents.',
 };
 
