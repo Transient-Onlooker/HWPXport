@@ -1,13 +1,10 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'] });
-
 export const metadata: Metadata = {
-  title: 'HWPX Port - Gemini 기반 시험지 복원',
-  description: 'Gemini AI 를 사용하여 HWPX 시험지를 복원하는 서비스',
+  title: 'HWPX Port',
+  description: 'Convert exam images, PDFs, or saved JSON into HWPX documents.',
 };
 
 export default function RootLayout({
@@ -17,7 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      <body className={inter.className}>
+      <body>
         <ErrorBoundary>{children}</ErrorBoundary>
       </body>
     </html>

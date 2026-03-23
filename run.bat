@@ -1,13 +1,36 @@
 @echo off
 chcp 65001 >nul
+cd /d "%~dp0"
+
 echo ========================================
-echo   HWPX Port - 개발 서버 시작
+echo   HWPX Port - Dev Server
 echo ========================================
 echo.
-echo 로컬 주소: http://localhost:3000
-echo.
-echo 서버를 중지하려면 Ctrl+C 를 누르세요.
-echo ========================================
+echo Local URL: http://localhost:3000
 echo.
 
-npm run dev
+if not exist node_modules (
+  echo node_modules not found. Running npm install first...
+  echo.
+  call npm install
+  if errorlevel 1 (
+    echo.
+    echo npm install failed.
+    pause
+    exit /b 1
+  )
+)
+
+echo Starting dev server...
+echo Press Ctrl+C to stop.
+echo.
+
+call npm run dev
+if errorlevel 1 (
+  echo.
+  echo Failed to start the dev server.
+  pause
+  exit /b 1
+)
+
+pause

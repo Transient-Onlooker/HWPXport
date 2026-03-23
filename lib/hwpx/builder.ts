@@ -1,64 +1,45 @@
+import { promises as fs } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
 import { ExamData } from '../types';
 
-/**
- * HWPX 빌더 - JSON 데이터를 실제 HWPX 파일로 변환
- * 
- * 기술 규칙:
- * 1. No Cache: <hp:linesegarray> 태그 절대 포함 안 함
- * 2. Space Magic: 문제 번호 뒤 <hp:nbSpace/><hp:fwSpace/> 필수 삽입
- * 3. Style Mapping: 일반 (4), 강조 (49)
- * 4. Column System: 2 단 레이아웃 (colCount="2")
- * 5. 수식 처리: <hp:equation><hp:script> 태그 사용
- */
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(MODULE_DIR, '..', '..');
+const TEMPLATE_CANDIDATES = [
+  path.join(PROJECT_ROOT, 'example.hwpx'),
+  path.join(PROJECT_ROOT, 'public', 'templates', 'template.hwpx'),
+];
 
-// 문자 속성 ID 상수
-const CHAR_PR = {
-  NORMAL: 4,      // 일반 텍스트
-  BOLD: 49,       // 볼드/강조 텍스트
-  NUMBER: 17,     // 문제 번호
-} as const;
+const SECTION_XMLNS = [
+  'xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app"',
+  'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"',
+  'xmlns:hp10="http://www.hancom.co.kr/hwpml/2016/paragraph"',
+  'xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"',
+  'xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"',
+  'xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"',
+  'xmlns:hhs="http://www.hancom.co.kr/hwpml/2011/history"',
+  'xmlns:hm="http://www.hancom.co.kr/hwpml/2011/master-page"',
+  'xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"',
+  'xmlns:dc="http://purl.org/dc/elements/1.1/"',
+  'xmlns:opf="http://www.idpf.org/2007/opf/"',
+  'xmlns:ooxmlchart="http://www.hancom.co.kr/hwpml/2016/ooxmlchart"',
+  'xmlns:hwpunitchar="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"',
+  'xmlns:epub="http://www.idpf.org/2007/ops"',
+  'xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"',
+].join(' ');
 
-/**
- * HWPX 의 XML 네임스페이스 정의
- */
-const XML_NS = 'http://www.hangulwordprocessor.com/hwpx/2023/content';
+const TEXT_CHAR_PR = 6;
+const BOLD_CHAR_PR = 7;
+const TITLE_PARA_PR = 16;
+const TITLE_STYLE_ID = 2;
+const BODY_PARA_PR = 13;
+const BODY_STYLE_ID = 0;
+const OPTION_PARA_PR = 14;
+const OPTION_STYLE_ID = 3;
+const BOX_PARA_PR = 11;
+const BOX_STYLE_ID = 15;
 
-/**
- * 마크다운 강조 (**텍스트**) 를 HWP XML 로 변환
- */
-function convertMarkdownToHwpXml(text: string): string {
-  const parts: string[] = [];
-  const regex = /\*\*(.+?)\*\*/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(text)) !== null) {
-    // 강조 전 일반 텍스트
-    if (match.index > lastIndex) {
-      const plainText = escapeXml(text.slice(lastIndex, match.index));
-      parts.push(`<hp:run charPrIDRef="${CHAR_PR.NORMAL}">${plainText}</hp:run>`);
-    }
-    
-    // 강조 텍스트
-    const boldText = escapeXml(match[1]);
-    parts.push(`<hp:run charPrIDRef="${CHAR_PR.BOLD}">${boldText}</hp:run>`);
-    
-    lastIndex = match.index + match[0].length;
-  }
-
-  // 나머지 텍스트
-  if (lastIndex < text.length) {
-    const plainText = escapeXml(text.slice(lastIndex));
-    parts.push(`<hp:run charPrIDRef="${CHAR_PR.NORMAL}">${plainText}</hp:run>`);
-  }
-
-  return parts.join('');
-}
-
-/**
- * XML 특수문자 이스케이프
- */
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -68,313 +49,237 @@ function escapeXml(text: string): string {
     .replace(/'/g, '&apos;');
 }
 
-/**
- * HWP 수식 문법을 XML 로 변환
- * n over 2 → <hp:equation><hp:script>n over 2</hp:script></hp:equation>
- */
-function convertFormulaToHwpXml(text: string): string {
-  // HWP 수식 패턴 감지 (간이 파싱)
-  const formulaPattern = /([a-zA-Z]\s+(?:over|sqrt|sum|prod|int|from|to|\^|_{)|\{[a-zA-Z0-9\s]+\})/g;
-  
-  return text.replace(formulaPattern, (match) => {
-    const escaped = escapeXml(match);
-    return `<hp:equation><hp:script>${escaped}</hp:script></hp:equation>`;
-  });
+function stripMarkdown(text: string): string {
+  return text.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`(.+?)`/g, '$1');
 }
 
-/**
- * 문제 발문을 HWPX Paragraph XML 로 변환
- * 
- * 기술 규칙 적용:
- * - 문제 번호 뒤: <hp:nbSpace/><hp:fwSpace/>
- * - 마크다운 강조: charPrIDRef="49"
- * - 수식: <hp:equation> 태그
- */
+function splitMarkdownRuns(text: string): Array<{ text: string; bold: boolean }> {
+  const runs: Array<{ text: string; bold: boolean }> = [];
+  const regex = /\*\*(.+?)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      runs.push({ text: text.slice(lastIndex, match.index), bold: false });
+    }
+    runs.push({ text: match[1], bold: true });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    runs.push({ text: text.slice(lastIndex), bold: false });
+  }
+
+  return runs.length > 0 ? runs : [{ text, bold: false }];
+}
+
+function buildTextRuns(text: string): string {
+  return splitMarkdownRuns(text)
+    .filter((run) => run.text.length > 0)
+    .map((run) => {
+      const charPrId = run.bold ? BOLD_CHAR_PR : TEXT_CHAR_PR;
+      const content = escapeXml(run.text.replace(/`/g, ''));
+      return `<hp:run charPrIDRef="${charPrId}"><hp:t>${content}</hp:t></hp:run>`;
+    })
+    .join('');
+}
+
+function buildParagraph(
+  paraId: number,
+  paraPrId: number,
+  styleId: number,
+  innerXml: string
+): string {
+  return `<hp:p id="${paraId}" paraPrIDRef="${paraPrId}" styleIDRef="${styleId}" pageBreak="0" columnBreak="0" merged="0">${innerXml}</hp:p>`;
+}
+
 function buildQuestionParagraph(question: ExamData['questions'][number], paraId: number): string {
-  const { number: qNum, text } = question;
-  
-  // 문제 번호 부분 (charPrIDRef="17")
-  const numberXml = `<hp:run charPrIDRef="${CHAR_PR.NUMBER}">${qNum}</hp:run>`;
-  
-  // Space Magic: 번호 뒤 필수 공백
-  const spaceMagic = '<hp:nbSpace/><hp:fwSpace/>';
-  
-  // 발문 본문 (마크다운 + 수식 변환)
-  let bodyText = text;
-  
-  // 먼저 수식을 별도 토큰으로 분리 (중복 변환 방지)
-  const formulaTokens: string[] = [];
-  bodyText = bodyText.replace(/(`[^`]+`)/g, (match, p1) => {
-    formulaTokens.push(p1);
-    return `__FORMULA_${formulaTokens.length - 1}__`;
-  });
-  
-  // 마크다운 강조 변환
-  bodyText = convertMarkdownToHwpXml(bodyText);
-  
-  // 수식 토큰 복원
-  formulaTokens.forEach((token, idx) => {
-    const formulaContent = escapeXml(token.replace(/`/g, ''));
-    bodyText = bodyText.replace(
-      `__FORMULA_${idx}__`,
-      `<hp:equation><hp:script>${formulaContent}</hp:script></hp:equation>`
+  const prefix = `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${question.number}.</hp:t></hp:run><hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:nbSpace/><hp:fwSpace/></hp:run>`;
+  return buildParagraph(paraId, BODY_PARA_PR, BODY_STYLE_ID, `${prefix}${buildTextRuns(question.text)}`);
+}
+
+function buildOptionsParagraphs(
+  options: string[],
+  startParaId: number
+): { xml: string; nextParaId: number } {
+  const symbols = ['(1)', '(2)', '(3)', '(4)', '(5)'];
+  const paragraphs: string[] = [];
+  let paraId = startParaId;
+
+  options.slice(0, 5).forEach((option, index) => {
+    const text = `${symbols[index] ?? '-'} ${stripMarkdown(option)}`;
+    paragraphs.push(
+      buildParagraph(
+        paraId++,
+        OPTION_PARA_PR,
+        OPTION_STYLE_ID,
+        `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(text)}</hp:t></hp:run>`
+      )
     );
   });
-  
-  return `
-        <hp:paragraph id="${paraId}">
-          <hp:header>
-            <hp:attr name="styleId" value="0"/>
-            <hp:attr name="textType" value="normal"/>
-          </hp:header>
-          <hp:paragraphText>
-            <hp:p>
-              ${numberXml}${spaceMagic}${bodyText}
-            </hp:p>
-          </hp:paragraphText>
-        </hp:paragraph>`;
+
+  return { xml: paragraphs.join(''), nextParaId: paraId };
 }
 
-/**
- * 보기박스 Paragraph 생성
- */
 function buildBoxParagraph(boxContext: string[], paraId: number): string {
-  if (boxContext.length === 0) return '';
-  
-  const boxText = escapeXml(boxContext.join(' | '));
-  
-  return `
-        <hp:paragraph id="${paraId}">
-          <hp:header>
-            <hp:attr name="styleId" value="1"/>
-            <hp:attr name="textType" value="normal"/>
-          </hp:header>
-          <hp:paragraphText>
-            <hp:p>
-              <hp:run charPrIDRef="${CHAR_PR.NORMAL}">${boxText}</hp:run>
-            </hp:p>
-          </hp:paragraphText>
-        </hp:paragraph>`;
+  const text = boxContext.map(stripMarkdown).join(' / ');
+  return buildParagraph(
+    paraId,
+    BOX_PARA_PR,
+    BOX_STYLE_ID,
+    `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(text)}</hp:t></hp:run>`
+  );
 }
 
-/**
- * 선택지 Paragraph 생성 (객관식)
- */
-function buildOptionsParagraph(options: string[], paraId: number): string {
-  if (options.length === 0) return '';
-  
-  const optionSymbols = ['①', '②', '③', '④', '⑤'];
-  const optionsText = options
-    .slice(0, 5)
-    .map((opt, idx) => `${optionSymbols[idx] || ''} ${escapeXml(opt)}`)
-    .join('  ');
-  
-  return `
-        <hp:paragraph id="${paraId}">
-          <hp:header>
-            <hp:attr name="styleId" value="2"/>
-            <hp:attr name="textType" value="normal"/>
-          </hp:header>
-          <hp:paragraphText>
-            <hp:p>
-              <hp:run charPrIDRef="${CHAR_PR.NORMAL}">${optionsText}</hp:run>
-            </hp:p>
-          </hp:paragraphText>
-        </hp:paragraph>`;
+function buildSectionPreamble(title: string): string {
+  return [
+    '<hp:p id="1" paraPrIDRef="17" styleIDRef="2" pageBreak="0" columnBreak="0" merged="0">',
+    `<hp:run charPrIDRef="${TEXT_CHAR_PR}">`,
+    '<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0">',
+    '<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/>',
+    '<hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>',
+    '<hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/>',
+    '<hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/>',
+    '<hp:pagePr landscape="WIDELY" width="59528" height="84188" gutterType="LEFT_ONLY"><hp:margin header="4251" footer="4251" gutter="0" left="5669" right="5669" top="4251" bottom="4251"/></hp:pagePr>',
+    '<hp:footNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="EACH_COLUMN" beneathText="0"/></hp:footNotePr>',
+    '<hp:endNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="END_OF_DOCUMENT" beneathText="0"/></hp:endNotePr>',
+    '<hp:pageBorderFill type="BOTH" borderFillIDRef="5" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="2267" bottom="1700"/></hp:pageBorderFill>',
+    '<hp:pageBorderFill type="EVEN" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>',
+    '<hp:pageBorderFill type="ODD" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>',
+    '</hp:secPr>',
+    '</hp:run>',
+    '<hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="1" sameGap="2268"><hp:colLine type="SOLID" width="0.4 mm" color="#000000"/></hp:colPr></hp:ctrl>',
+    '<hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>',
+    '<hp:ctrl><hp:footer id="0" applyPageType="BOTH"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="BOTTOM" linkListIDRef="0" linkListNextIDRef="0" textWidth="48190" textHeight="4251" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="2" styleIDRef="10" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="2"/></hp:p></hp:subList></hp:footer></hp:ctrl>',
+    '<hp:ctrl><hp:header id="2" applyPageType="BOTH"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="48190" textHeight="4251" hasTextRef="0" hasNumRef="0">',
+    '<hp:p id="0" paraPrIDRef="2" styleIDRef="10" pageBreak="0" columnBreak="0" merged="0">',
+    `<hp:run charPrIDRef="${TEXT_CHAR_PR}"><hp:t>${escapeXml(title)}</hp:t></hp:run>`,
+    '</hp:p>',
+    '</hp:subList></hp:header></hp:ctrl>',
+    '</hp:p>',
+  ].join('');
 }
 
-/**
- * HWPX 의 content.xml 생성
- */
-function buildContentXml(examData: ExamData): string {
-  // 2 단 컬럼 설정 (수능 시험지 레이아웃)
-  const colPr = '<hp:colPr colCount="2" sameGap="3120"/>';
-  
-  // 제목 Paragraph
-  const titleXml = `
-        <hp:paragraph id="0">
-          <hp:header>
-            <hp:attr name="styleId" value="3"/>
-            <hp:attr name="textType" value="title"/>
-          </hp:header>
-          <hp:paragraphText>
-            <hp:p>
-              <hp:run charPrIDRef="${CHAR_PR.BOLD}">${escapeXml(examData.title)}</hp:run>
-            </hp:p>
-          </hp:paragraphText>
-        </hp:paragraph>`;
-  
-  // 문제들 생성
-  let paraId = 1;
-  const questionsXml = examData.questions.map((q) => {
-    let xml = buildQuestionParagraph(q, paraId++);
-    
-    // 보기박스
-    if (q.boxContext.length > 0) {
-      xml += buildBoxParagraph(q.boxContext, paraId++);
+function buildTitleParagraph(title: string, paraId: number): string {
+  return buildParagraph(
+    paraId,
+    TITLE_PARA_PR,
+    TITLE_STYLE_ID,
+    `<hp:run charPrIDRef="${BOLD_CHAR_PR}"><hp:t>${escapeXml(title)}</hp:t></hp:run>`
+  );
+}
+
+function buildSectionXml(examData: ExamData): string {
+  const paragraphs: string[] = [];
+  let paraId = 2;
+
+  paragraphs.push(buildTitleParagraph(examData.title, paraId++));
+
+  for (const question of examData.questions) {
+    paragraphs.push(buildQuestionParagraph(question, paraId++));
+
+    if (question.boxContext.length > 0) {
+      paragraphs.push(buildBoxParagraph(question.boxContext, paraId++));
     }
-    
-    // 선택지
-    if (q.options.length > 0) {
-      xml += buildOptionsParagraph(q.options, paraId++);
+
+    if (question.options.length > 0) {
+      const options = buildOptionsParagraphs(question.options, paraId);
+      paragraphs.push(options.xml);
+      paraId = options.nextParaId;
     }
-    
-    return xml;
-  }).join('\n');
-  
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<hp:document xmlns:hp="${XML_NS}" version="1.0">
-  <hp:head>
-    <hp:fileHeader version="1.0"/>
-    <hp:docInfo>
-      <hp:pageDef paperSize="215900000" paperWidth="215900000" paperHeight="297000000" 
-                  marginLeft="19050000" marginRight="19050000" marginTop="19050000" marginBottom="19050000"/>
-      <hp:fontList>
-        <hp:font id="0" name="Gulim"/>
-        <hp:font id="1" name="Batang"/>
-        <hp:font id="2" name="Malgun Gothic"/>
-      </hp:fontList>
-      <hp:charShapeList>
-        <hp:charShape id="${CHAR_PR.NORMAL}">
-          <hp:attr name="fontName" value="Batang"/>
-          <hp:attr name="fontSize" value="10000"/>
-        </hp:charShape>
-        <hp:charShape id="${CHAR_PR.BOLD}">
-          <hp:attr name="fontName" value="Batang"/>
-          <hp:attr name="fontSize" value="10000"/>
-          <hp:attr name="bold" value="true"/>
-        </hp:charShape>
-        <hp:charShape id="${CHAR_PR.NUMBER}">
-          <hp:attr name="fontName" value="Gulim"/>
-          <hp:attr name="fontSize" value="10000"/>
-          <hp:attr name="bold" value="true"/>
-        </hp:charShape>
-      </hp:charShapeList>
-      <hp:paraShapeList>
-        <hp:paraShape id="0">
-          <hp:attr name="align" value="justify"/>
-          <hp:attr name="lineSpacing" value="160"/>
-        </hp:paraShape>
-        <hp:paraShape id="1">
-          <hp:attr name="align" value="justify"/>
-          <hp:attr name="lineSpacing" value="160"/>
-          <hp:attr name="borderType" value="1"/>
-        </hp:paraShape>
-        <hp:paraShape id="2">
-          <hp:attr name="align" value="justify"/>
-          <hp:attr name="lineSpacing" value="160"/>
-        </hp:paraShape>
-        <hp:paraShape id="3">
-          <hp:attr name="align" value="center"/>
-          <hp:attr name="lineSpacing" value="200"/>
-        </hp:paraShape>
-      </hp:paraShapeList>
-    </hp:docInfo>
-  </hp:head>
-  <hp:body>
-    <hp:section>
-      ${colPr}
-      <hp:bodySection>
-        ${titleXml}
-        ${questionsXml}
-      </hp:bodySection>
-    </hp:section>
-  </hp:body>
-</hp:document>`;
+
+    paragraphs.push(buildParagraph(paraId++, BODY_PARA_PR, BODY_STYLE_ID, `<hp:run charPrIDRef="${TEXT_CHAR_PR}"/>`));
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec ${SECTION_XMLNS}>${buildSectionPreamble(
+    examData.title
+  )}${paragraphs.join('')}</hs:sec>`;
 }
 
-/**
- * HWPX 의 metadata.xml 생성
- */
-function buildMetadataXml(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<hp:metadata xmlns:hp="${XML_NS}">
-  <hp:creator>
-    <hp:programName>HWPXport</hp:programName>
-    <hp:companyName>HWPXport</hp:companyName>
-  </hp:creator>
-  <hp:creationDate>${new Date().toISOString()}</hp:creationDate>
-</hp:metadata>`;
+function buildPreviewText(examData: ExamData): string {
+  const lines = [examData.title, ''];
+
+  for (const question of examData.questions) {
+    lines.push(`${question.number}. ${stripMarkdown(question.text)}`);
+    if (question.boxContext.length > 0) {
+      lines.push(`[BOX] ${question.boxContext.map(stripMarkdown).join(' / ')}`);
+    }
+    if (question.options.length > 0) {
+      lines.push(question.options.map(stripMarkdown).join(' | '));
+    }
+    lines.push('');
+  }
+
+  return lines.join('\r\n').trim();
 }
 
-/**
- * HWPX 의 rels.xml 생성
- */
-function buildRelsXml(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://www.hangulwordprocessor.com/hwpx/2023/content" Target="content.xml"/>
-  <Relationship Id="rId2" Type="http://www.hangulwordprocessor.com/hwpx/2023/metadata" Target="metadata.xml"/>
-</Relationships>`;
+async function findTemplatePath(): Promise<string> {
+  for (const candidate of TEMPLATE_CANDIDATES) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error('HWPX template not found. example.hwpx or public/templates/template.hwpx is required.');
 }
 
-/**
- * HWPX 의 app.xml 생성
- */
-function buildAppXml(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
-  <Application>HWPXport</Application>
-  <TotalTime>0</TotalTime>
-</Properties>`;
+async function loadTemplateZip(): Promise<JSZip> {
+  const templatePath = await findTemplatePath();
+  const buffer = await fs.readFile(templatePath);
+
+  try {
+    return await JSZip.loadAsync(buffer);
+  } catch {
+    throw new Error(`Failed to open HWPX template: ${templatePath}`);
+  }
 }
 
-/**
- * HWPX 의 core.xml 생성
- */
-function buildCoreXml(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties">
-  <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">HWPXport</dc:creator>
-  <cp:lastModifiedBy>HWPXport</cp:lastModifiedBy>
-</cp:coreProperties>`;
+async function updateContentHpf(zip: JSZip, title: string): Promise<void> {
+  const file = zip.file('Contents/content.hpf');
+  if (!file) {
+    return;
+  }
+
+  const xml = await file.async('string');
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const koreanDate = new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'long',
+    timeStyle: 'medium',
+    timeZone: 'Asia/Seoul',
+  }).format(new Date());
+
+  const withTitle = xml.match(/<opf:title\/>/)
+    ? xml.replace('<opf:title/>', `<opf:title>${escapeXml(title)}</opf:title>`)
+    : xml.replace(/<opf:title>.*?<\/opf:title>/, `<opf:title>${escapeXml(title)}</opf:title>`);
+
+  const updated = withTitle
+    .replace(/(<opf:meta name="ModifiedDate" content="text">).*?(<\/opf:meta>)/, `$1${now}$2`)
+    .replace(/(<opf:meta name="date" content="text">).*?(<\/opf:meta>)/, `$1${escapeXml(koreanDate)}$2`);
+
+  zip.file('Contents/content.hpf', updated);
 }
 
-/**
- * [Content_Types].xml 생성
- */
-function buildContentTypes(): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/content.xml" ContentType="application/vnd.hanplus.hwpx.content+xml"/>
-  <Override PartName="/metadata.xml" ContentType="application/vnd.hanplus.hwpx.metadata+xml"/>
-</Types>`;
-}
-
-/**
- * ExamData 를 받아 HWPX 파일 (Uint8Array) 생성
- * 
- * @param examData - Gemini 가 추출한 시험지 데이터
- * @returns HWPX 파일 바이트 배열
- */
 export async function buildHwpx(examData: ExamData): Promise<Uint8Array> {
-  const zip = new JSZip();
+  const zip = await loadTemplateZip();
 
-  // HWPX 는 ZIP 형식이므로 각 XML 파일을 추가
-  zip.file('content.xml', buildContentXml(examData));
-  zip.file('metadata.xml', buildMetadataXml());
-  zip.file('_rels/.rels', buildRelsXml());
-  zip.file('docProps/app.xml', buildAppXml());
-  zip.file('docProps/core.xml', buildCoreXml());
-  zip.file('[Content_Types].xml', buildContentTypes());
+  zip.file('mimetype', 'application/hwp+zip', { compression: 'STORE' });
+  zip.file('Contents/section0.xml', buildSectionXml(examData));
+  zip.file('Preview/PrvText.txt', buildPreviewText(examData));
 
-  // ZIP 파일 생성
-  const content = await zip.generateAsync({ type: 'uint8array' });
-  
-  return content;
+  await updateContentHpf(zip, examData.title);
+
+  return zip.generateAsync({
+    type: 'uint8array',
+    compression: 'DEFLATE',
+    mimeType: 'application/vnd.hanplus.hwpx',
+  });
 }
 
-/**
- * HWPX 파일명 생성
- */
 export function generateHwpxFilename(title: string): string {
-  // 파일명에 사용할 수 없는 문자 제거
-  const safeTitle = title
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
-    .slice(0, 50); // 길이 제한
-  
-  return `${safeTitle}.hwpx`;
+  const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 50);
+  return `${safeTitle || 'exam'}.hwpx`;
 }

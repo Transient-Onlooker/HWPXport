@@ -1,123 +1,145 @@
 'use client';
 
-import { useCallback, useState, DragEvent, ChangeEvent } from 'react';
+import { ChangeEvent, DragEvent, useCallback, useState } from 'react';
 
 interface Props {
   onFileSelect: (files: File[]) => void;
   disabled?: boolean;
   accept?: string;
-  maxSize?: number; // bytes
+  maxSize?: number;
   multiple?: boolean;
 }
 
-/**
- * 드래그 앤 드롭 파일 업로드 컴포넌트
- * - 이미지 미리보기
- * - 파일 크기 제한
- * - 드래그 앤 드롭 + 클릭 업로드 지원
- * - 다중 파일 업로드 지원
- */
+type PreviewItem = {
+  url: string;
+  name: string;
+  type: 'image' | 'pdf' | 'json';
+};
+
+function isJsonFile(file: File): boolean {
+  return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
+}
+
 export function FileUploader({
   onFileSelect,
   disabled = false,
-  accept = 'image/*',
-  maxSize = 10 * 1024 * 1024, // 10MB
+  accept = 'image/*,application/pdf,application/json,.json',
+  maxSize = 10 * 1024 * 1024,
   multiple = true,
 }: Props) {
   const [isDragging, setIsDragging] = useState(false);
-  const [previewUrls, setPreviewUrls] = useState<{ url: string; name: string; type: string }[]>([]);
+  const [previewItems, setPreviewItems] = useState<PreviewItem[]>([]);
 
   const validateFile = (file: File): string | null => {
     const isImage = file.type.startsWith('image/');
     const isPdf = file.type === 'application/pdf';
+    const isJson = isJsonFile(file);
 
-    if (!isImage && !isPdf) {
-      return '이미지 또는 PDF 파일만 업로드할 수 있습니다.';
+    if (!isImage && !isPdf && !isJson) {
+      return 'Only image, PDF, or JSON files are supported.';
     }
+
     if (file.size > maxSize) {
-      return `파일 크기는 ${maxSize / 1024 / 1024}MB 이하여야 합니다.`;
+      return `File size must be <= ${maxSize / 1024 / 1024}MB.`;
     }
+
     return null;
   };
 
-  const handleFiles = useCallback((files: FileList | File[]) => {
-    const fileArray = Array.from(files);
-    const validFiles: File[] = [];
-    
-    for (const file of fileArray) {
-      const error = validateFile(file);
-      if (error) {
-        alert(`${file.name}: ${error}`);
-        continue;
+  const handleFiles = useCallback(
+    (files: FileList | File[]) => {
+      const fileArray = Array.from(files);
+      const validFiles: File[] = [];
+
+      for (const file of fileArray) {
+        const error = validateFile(file);
+        if (error) {
+          alert(`${file.name}: ${error}`);
+          continue;
+        }
+        validFiles.push(file);
       }
-      validFiles.push(file);
-    }
 
-    if (validFiles.length === 0) return;
+      if (validFiles.length === 0) {
+        return;
+      }
 
-    // 미리보기 생성
-    const previews: { url: string; name: string; type: string }[] = [];
-    
-    validFiles.forEach((file) => {
-      if (file.type === 'application/pdf') {
-        previews.push({ url: '', name: file.name, type: 'pdf' });
-      } else {
+      setPreviewItems([]);
+
+      validFiles.forEach((file) => {
+        if (file.type === 'application/pdf') {
+          setPreviewItems((prev: PreviewItem[]) => [...prev, { url: '', name: file.name, type: 'pdf' }]);
+          return;
+        }
+
+        if (isJsonFile(file)) {
+          setPreviewItems((prev: PreviewItem[]) => [...prev, { url: '', name: file.name, type: 'json' }]);
+          return;
+        }
+
         const reader = new FileReader();
-        reader.onload = (e) => {
-          setPreviewUrls((prev) => [
+        reader.onload = (event) => {
+          setPreviewItems((prev: PreviewItem[]) => [
             ...prev,
-            { url: e.target?.result as string, name: file.name, type: 'image' }
+            { url: event.target?.result as string, name: file.name, type: 'image' },
           ]);
         };
         reader.readAsDataURL(file);
+      });
+
+      onFileSelect(validFiles);
+    },
+    [maxSize, onFileSelect]
+  );
+
+  const handleDragEnter = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!disabled) {
+        setIsDragging(true);
       }
-    });
+    },
+    [disabled]
+  );
 
-    onFileSelect(validFiles);
-  }, [onFileSelect, maxSize]);
-
-  const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!disabled) {
-      setIsDragging(true);
-    }
-  }, [disabled]);
-
-  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
     setIsDragging(false);
   }, []);
 
-  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
   }, []);
 
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDragging(false);
 
-    if (disabled) return;
+      if (!disabled && event.dataTransfer.files.length > 0) {
+        handleFiles(event.dataTransfer.files);
+      }
+    },
+    [disabled, handleFiles]
+  );
 
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      handleFiles(files);
-    }
-  }, [disabled, handleFiles]);
+  const handleInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (files && files.length > 0) {
+        handleFiles(files);
+      }
+    },
+    [handleFiles]
+  );
 
-  const handleInputChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      handleFiles(files);
-    }
-  }, [handleFiles]);
-
-  const handleReset = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPreviewUrls([]);
+  const handleReset = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    setPreviewItems([]);
   }, []);
 
   return (
@@ -127,30 +149,25 @@ export function FileUploader({
         transition-all duration-200 ease-in-out
         ${isDragging
           ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20'
-          : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
-        }
+          : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}
         ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-        ${previewUrls.length > 0 ? 'p-2 overflow-auto' : 'flex flex-col items-center justify-center'}
+        ${previewItems.length > 0 ? 'p-2 overflow-auto' : 'flex flex-col items-center justify-center'}
       `}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {previewUrls.length > 0 ? (
+      {previewItems.length > 0 ? (
         <div className="relative w-full h-full">
           <div className="grid grid-cols-3 gap-2 h-full">
-            {previewUrls.map((item, index) => (
-              <div key={index} className="relative border rounded-lg overflow-hidden">
+            {previewItems.map((item, index) => (
+              <div key={`${item.name}-${index}`} className="relative border rounded-lg overflow-hidden">
                 {item.type === 'image' ? (
-                  <img
-                    src={item.url}
-                    alt={item.name}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={item.url} alt={item.name} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-800">
-                    <div className="text-3xl mb-1">📄</div>
+                    <div className="text-3xl mb-1">{item.type === 'json' ? '{ }' : 'PDF'}</div>
                     <p className="text-xs text-gray-600 dark:text-gray-400 truncate px-1">
                       {item.name}
                     </p>
@@ -164,7 +181,7 @@ export function FileUploader({
               type="button"
               onClick={handleReset}
               className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors"
-              title="파일 제거"
+              title="Reset files"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -172,7 +189,7 @@ export function FileUploader({
             </button>
           )}
           <p className="absolute bottom-2 left-2 text-xs text-gray-600 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded">
-            총 {previewUrls.length}개 파일
+            {previewItems.length} file(s)
           </p>
         </div>
       ) : (
@@ -186,15 +203,15 @@ export function FileUploader({
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
           <div className="text-center p-6">
-            <div className="text-5xl mb-4">📁</div>
+            <div className="text-5xl mb-4">+</div>
             <p className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
-              파일을 여기에 드래그하거나 클릭하세요
+              Drop files here or click to upload
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              지원 형식: PNG, JPG, JPEG, WEBP, PDF (최대 {maxSize / 1024 / 1024}MB)
+              Supported: PNG, JPG, JPEG, WEBP, PDF, JSON (max {maxSize / 1024 / 1024}MB)
             </p>
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-              여러 파일을 동시에 선택할 수 있습니다
+              Use JSON to regenerate HWPX without calling Gemini again
             </p>
           </div>
         </>
