@@ -1,9 +1,14 @@
 # HWPXport
 
-Gemini API를 이용해 시험지 이미지 또는 PDF를 분석하고, 이를 `.hwpx` 파일로 내려받게 하는 Next.js 앱입니다.  
+> **시험지 이미지와 PDF를 Gemini로 분석해 `.hwpx`로 복원하는 Next.js 앱**
+
 프론트엔드에서 업로드 파일을 전처리한 뒤 `/api/process`로 전송하고, 서버에서 Gemini로 문제 데이터를 추출한 후 HWPX ZIP 구조를 조립합니다.
 
-## 주요 기능
+---
+
+## 프로젝트 소개
+
+HWPXport는 시험지 이미지 또는 PDF를 받아 문제 구조를 분석하고, 이를 한글 문서 형식인 `.hwpx`로 내려받게 하는 도구입니다.
 
 - 이미지 파일(`PNG`, `JPG`, `JPEG`, `WEBP`)과 `PDF` 업로드 지원
 - 드래그 앤 드롭 업로드 UI
@@ -18,6 +23,20 @@ Gemini API를 이용해 시험지 이미지 또는 PDF를 분석하고, 이를 `
 - 처리된 이미지 미리보기
 - Gemini JSON 응답 확인 및 JSON 다운로드
 - React `ErrorBoundary` 적용
+
+---
+
+## 주요 구성
+
+| 영역 | 내용 |
+|------|------|
+| **Frontend** | Next.js App Router 기반 업로드 UI, 상태 표시, 자동 다운로드 |
+| **AI Parsing** | Gemini Router + Parser 2단계 처리 |
+| **Conversion** | `jszip` 기반 HWPX ZIP/XML 조립 |
+| **Input Handling** | 이미지 리사이즈, PDF 페이지 렌더링, 순차 업로드 |
+| **Debugging** | 처리 이미지 미리보기, JSON 응답 헤더 확인 |
+
+---
 
 ## 동작 방식
 
@@ -68,6 +87,8 @@ Gemini API를 이용해 시험지 이미지 또는 PDF를 분석하고, 이를 `
 - 백틱으로 감싼 수식을 `<hp:equation><hp:script>...</hp:script></hp:equation>`로 삽입
 - 제목, 보기 박스, 선택지 문단 생성
 
+---
+
 ## 프로젝트 구조
 
 ```text
@@ -90,6 +111,8 @@ public/
     template.hwpx
 inputprompt.txt
 ```
+
+---
 
 ## 실행 방법
 
@@ -117,6 +140,8 @@ npm run dev
 
 기본적으로 `http://localhost:3000`에서 확인합니다.
 
+---
+
 ## 사용 방법
 
 1. 이미지 또는 PDF를 업로드합니다.
@@ -125,6 +150,8 @@ npm run dev
 4. 서버가 HWPX 파일을 생성해 응답합니다.
 5. 브라우저가 `.hwpx` 파일을 자동 다운로드합니다.
 6. 성공 화면에서 처리된 이미지와 JSON 응답을 확인할 수 있습니다.
+
+---
 
 ## 구현 세부사항
 
@@ -154,6 +181,8 @@ API는 HWPX 바이너리를 직접 반환합니다.
 - `Content-Disposition`으로 파일명 제공
 - `X-Exam-Data` 헤더에 Base64 인코딩된 JSON 포함
 
+---
+
 ## 현재 구현 기준의 한계
 
 - `public/templates/template.hwpx` 파일은 저장소에 포함되어 있지만, 현재 빌더는 이 템플릿을 읽어 재조립하지 않고 직접 ZIP/XML을 생성합니다.
@@ -162,7 +191,9 @@ API는 HWPX 바이너리를 직접 반환합니다.
 - [`lib/hwpx/templates.ts`](C:/Users/junuh/Desktop/코딩/HWPXport/lib/hwpx/templates.ts)에 정의된 템플릿 경로와 상수는 현재 핵심 처리 경로에서 직접 사용되지 않습니다.
 - README는 [`inputprompt.txt`](C:/Users/junuh/Desktop/코딩/HWPXport/inputprompt.txt)의 목표를 참고했지만, 설명 기준은 실제 커밋된 코드입니다.
 
-## 의존성
+---
+
+## 사용 기술
 
 - `next`
 - `react`
@@ -172,6 +203,8 @@ API는 HWPX 바이너리를 직접 반환합니다.
 - `pdfjs-dist`
 - `tailwindcss`
 - `typescript`
+
+---
 
 ## 참고 파일
 

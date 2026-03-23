@@ -19,6 +19,7 @@
 # misc
 .DS_Store
 *.pem
+example.hwpx
 
 # debug
 npm-debug.log*
